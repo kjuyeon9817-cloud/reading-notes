@@ -509,7 +509,7 @@
       '</div>' +
 
       '<div class="card"><h2><span class="section-num">2</span>발췌한 문장</h2>' +
-      '<div id="quotes">' + entry.quotes.map((q, i) => quoteHtml(q, i)).join('') + '</div>' +
+      quotesListHtml(entry.quotes) +
       '<button class="btn ghost small" id="add-quote" type="button">+ 문장 추가</button></div>' +
 
       '<div class="card"><h2><span class="section-num">3</span>오늘 읽은 내용 정리</h2>' +
@@ -537,14 +537,27 @@
     app.querySelectorAll('[data-date]').forEach(el => el.addEventListener('click', () => go({ name: 'book', bookId: book.id, date: el.dataset.date })));
 
     document.getElementById('add-quote').addEventListener('click', () => {
-      live().quotes.push({ id: uid(), text: '', page: '', reason: '' }); commit(); render();
-      const tas = app.querySelectorAll('#quotes textarea[data-qf="text"]'); if (tas.length) tas[tas.length - 1].focus();
+      const qs = live().quotes;
+      qs.push({ id: uid(), text: '', page: '', reason: '' }); commit();
+      view.openQuote = qs.length - 1;
+      view.qpage = Math.floor((qs.length - 1) / QUOTES_PER_PAGE);
+      render();
+      const ta = app.querySelector('#quotes textarea[data-qf="text"]'); if (ta) ta.focus();
     });
+    app.querySelectorAll('[data-qopen]').forEach(el => el.addEventListener('click', () => {
+      const i = Number(el.dataset.qopen);
+      view.openQuote = view.openQuote === i ? null : i;
+      render();
+      const row = app.querySelector('[data-qopen="' + i + '"]'); if (row) row.scrollIntoView({ block: 'nearest' });
+    }));
+    app.querySelectorAll('[data-qpage]').forEach(el => el.addEventListener('click', () => {
+      view.qpage = Number(el.dataset.qpage); view.openQuote = null; render();
+    }));
     app.querySelectorAll('#quotes [data-qi]').forEach(el => {
       const i = Number(el.dataset.qi), f = el.dataset.qf;
       if (f === 'remove') el.addEventListener('click', () => {
         if (!confirm('이 문장을 지울까요?')) return;
-        live().quotes.splice(i, 1); commit(); render();
+        live().quotes.splice(i, 1); view.openQuote = null; commit(); render();
       });
       else bindEl(el, v => { live().quotes[i][f] = v; });
     });
@@ -573,6 +586,34 @@
     function bindEl(el, set) {
       el.addEventListener('input', () => { set(el.value); commit(); });
     }
+  }
+
+  const QUOTES_PER_PAGE = 20;
+
+  // 발췌 문장: 한 줄 목록으로 접어 두고, 누른 문장만 펼쳐서 쪽수·고른 이유와 함께 고친다.
+  function quotesListHtml(quotes) {
+    const pages = Math.max(1, Math.ceil(quotes.length / QUOTES_PER_PAGE));
+    const page = Math.min(Math.max(view.qpage || 0, 0), pages - 1);
+    const start = page * QUOTES_PER_PAGE;
+    const rows = quotes.slice(start, start + QUOTES_PER_PAGE).map((q, k) => {
+      const i = start + k;
+      const first = (q.text || '').trim().split('\n')[0];
+      const preview = first ? (first.length > 40 ? first.slice(0, 40) + '…' : first) : '(아직 비어 있어요)';
+      const open = view.openQuote === i;
+      return '<div class="qrow' + (open ? ' open' : '') + '">' +
+        '<button type="button" class="qrow-head" data-qopen="' + i + '" aria-expanded="' + open + '">' +
+        '<span class="qnum">' + (i + 1) + '</span>' +
+        '<span class="qtext' + (first ? '' : ' muted') + '">' + esc(preview) + '</span>' +
+        (q.page ? '<span class="qpage">' + esc(q.page) + '</span>' : '') +
+        '<span class="qmark" title="' + (q.reason && q.reason.trim() ? '고른 이유 있음' : '고른 이유 없음') + '">' + (q.reason && q.reason.trim() ? '✎' : '') + '</span>' +
+        '<span class="qchev">' + (open ? '▲' : '▼') + '</span></button>' +
+        (open ? quoteHtml(q, i) : '') + '</div>';
+    }).join('');
+    const pager = pages > 1 ? '<div class="pager">' + Array.from({ length: pages }, (_, p) =>
+      '<button type="button" class="chip' + (p === page ? ' on' : '') + '" data-qpage="' + p + '">' +
+      (p * QUOTES_PER_PAGE + 1) + '–' + Math.min((p + 1) * QUOTES_PER_PAGE, quotes.length) + '</button>').join('') + '</div>' : '';
+    return (quotes.length ? '<p class="small muted">' + quotes.length + '개 · 누르면 쪽수와 고른 이유가 보여요</p>' : '') +
+      '<div id="quotes">' + rows + '</div>' + pager;
   }
 
   function quoteHtml(q, i) {

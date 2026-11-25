@@ -166,3 +166,21 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .pf-after { margin: 4px 0; white-space: pre-wrap; }
 .pf-before del { background: var(--warn-soft); color: var(--warn); }
 .pf-after ins { background: var(--ok-soft); color: var(--ok); text-decoration: none; font-weight: 700; }
+
+.qrow { border-bottom: 1px solid var(--line); }
+.qrow:last-child { border-bottom: 0; }
+.qrow-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: none; border: 0; padding: 10px 2px; font: inherit; color: var(--ink); cursor: pointer;
+}
+.qrow-head:hover .qtext { color: var(--accent); }
+.qnum {
+  flex: none; min-width: 1.7em; height: 1.7em; line-height: 1.7em; text-align: center; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: .78rem; font-weight: 700;
+}
+.qtext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qpage { flex: none; font-size: .78rem; color: var(--muted); }
+.qmark { flex: none; width: 1em; color: var(--ok); font-size: .85rem; }
+.qchev { flex: none; font-size: .7rem; color: var(--muted); }
+.qrow.open .quote { margin-top: 0; }
+.pager { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
