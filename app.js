@@ -716,10 +716,11 @@
   }
 
   function llm() {
-    return Object.assign({ provider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: '' }, state.llm || {});
+    return Object.assign({ provider: 'lmstudio', lmUrl: 'http://127.0.0.1:1234', lmModel: '', ollamaUrl: 'http://localhost:11434', ollamaModel: '' }, state.llm || {});
   }
   function llmReady() {
     const l = llm();
+    if (l.provider === 'lmstudio') return !!l.lmModel;
     return l.provider === 'ollama' ? !!l.ollamaModel : !!settings.claudeKey;
   }
 
@@ -729,9 +730,10 @@
     let h = '<div class="card"><h2>맞춤법·문맥 다듬기</h2>';
     if (!llmReady()) {
       return h + '<p class="small muted">AI가 오타와 어색한 곳을 찾아 제안해요. 쓰려면 <a href="#" data-go="settings">설정</a>에서 ' +
-        (l.provider === 'ollama' ? 'Ollama 모델을 골라주세요.' : 'Claude API 키를 넣어주세요.') + '</p></div>';
+        (l.provider === 'claude' ? 'Claude API 키를 넣어주세요.' : '모델을 골라주세요.') + '</p></div>';
     }
-    h += '<p class="small muted">사용 중: ' + (l.provider === 'ollama' ? '내 컴퓨터 Ollama · ' + esc(l.ollamaModel) : 'Claude') + '</p>';
+    h += '<p class="small muted">사용 중: ' + (l.provider === 'lmstudio' ? 'LM Studio · ' + esc(l.lmModel) :
+      l.provider === 'ollama' ? 'Ollama · ' + esc(l.ollamaModel) : 'Claude') + '</p>';
     h += '<p class="small muted">오타, 띄어쓰기, 뜻이 안 통하는 곳만 제안해요. 말투는 그대로 두고, 적용할지는 하나씩 직접 골라요. 책에서 옮긴 문장은 건드리지 않아요.</p>';
     if (st.loading) return h + '<p>살펴보는 중이에요…</p></div>';
     if (st.error) h += '<p class="notice">' + esc(st.error) + '</p>';
@@ -764,8 +766,8 @@
         const mod = await import('./proofread.js');
         const l = llm();
         const payload = fields.map(f => ({ id: f.id, label: f.label, text: f.text }));
-        const res = l.provider === 'ollama'
-          ? await mod.proofreadOllama(l.ollamaUrl, l.ollamaModel, payload)
+        const res = l.provider === 'lmstudio' ? await mod.proofreadLMStudio(l.lmUrl, l.lmModel, payload)
+          : l.provider === 'ollama' ? await mod.proofreadOllama(l.ollamaUrl, l.ollamaModel, payload)
           : await mod.proofread(settings.claudeKey, payload);
         const byId = Object.fromEntries(fields.map(f => [f.id, f]));
         view.proof = { items: res.map(r => ({ id: r.id, label: byId[r.id].label, original: byId[r.id].text, revised: r.revised, reason: r.reason })) };
@@ -943,19 +945,26 @@
       '</div>' +
       (() => {
         const l = llm();
-        const isO = l.provider === 'ollama';
+        const isO = l.provider === 'ollama', isL = l.provider === 'lmstudio';
+        const local = (urlId, urlVal, modelId, modelVal, ph, note) =>
+          '<p class="small muted">' + note + '</p>' +
+          '<label for="' + urlId + '">서버 주소</label><input id="' + urlId + '" type="text" autocapitalize="off" value="' + esc(urlVal) + '">' +
+          '<label for="' + modelId + '">모델</label>' +
+          '<div class="date-bar"><input id="' + modelId + '" type="text" autocapitalize="off" style="flex:1" placeholder="' + ph + '" value="' + esc(modelVal) + '">' +
+          '<button class="btn ghost small" type="button" id="s-olist">모델 목록 불러오기</button></div>' +
+          '<div id="s-olist-out" class="date-chips"></div>';
         return '<div class="card"><h2>맞춤법·문맥 다듬기</h2>' +
           '<p class="small muted">포스팅용 글 화면에서 오타와 어색한 곳을 제안받을 때 쓸 AI를 골라요.</p>' +
           '<div class="seg" id="s-provider">' +
-          '<button type="button" data-v="ollama" class="' + (isO ? 'on' : '') + '">내 컴퓨터 (Ollama)</button>' +
-          '<button type="button" data-v="claude" class="' + (!isO ? 'on' : '') + '">Claude</button></div>' +
-          (isO
-            ? '<p class="small muted">기록이 내 컴퓨터 밖으로 나가지 않고 요금도 없어요. Ollama가 켜져 있는 컴퓨터에서만 돼요 (휴대폰에서는 안 돼요).</p>' +
-              '<label for="s-ourl">Ollama 주소</label><input id="s-ourl" type="text" autocapitalize="off" value="' + esc(l.ollamaUrl) + '">' +
-              '<label for="s-omodel">모델</label>' +
-              '<div class="date-bar"><input id="s-omodel" type="text" autocapitalize="off" style="flex:1" placeholder="예: gemma3n:e4b" value="' + esc(l.ollamaModel) + '">' +
-              '<button class="btn ghost small" type="button" id="s-olist">모델 목록 불러오기</button></div>' +
-              '<div id="s-olist-out" class="date-chips"></div>'
+          '<button type="button" data-v="lmstudio" class="' + (isL ? 'on' : '') + '">LM Studio</button>' +
+          '<button type="button" data-v="ollama" class="' + (isO ? 'on' : '') + '">Ollama</button>' +
+          '<button type="button" data-v="claude" class="' + (!isO && !isL ? 'on' : '') + '">Claude</button></div>' +
+          (isL
+            ? local('s-ourl', l.lmUrl, 's-omodel', l.lmModel, '예: google/gemma-4-e2b',
+                '내 컴퓨터의 LM Studio를 써요. 기록이 밖으로 나가지 않고 요금도 없어요. LM Studio Developer 탭에서 서버를 켜고, 서버 설정의 <strong>Enable CORS</strong>를 켜주세요. 그 컴퓨터에서만 돼요.')
+            : isO
+            ? local('s-ourl', l.ollamaUrl, 's-omodel', l.ollamaModel, '예: gemma3n:e4b',
+                '내 컴퓨터의 Ollama를 써요. OLLAMA_ORIGINS 설정이 필요해요 (README 참고). 그 컴퓨터에서만 돼요.')
             : '<p class="small muted">GitHub 토큰처럼 화면이 열려 있는 동안만 기억하고 저장하지 않아요. 쓴 만큼 Anthropic에 요금이 나가요.</p>' +
               '<label for="s-claude">Claude API 키</label><input id="s-claude" type="password" autocomplete="off" placeholder="sk-ant-..." value="' + esc(settings.claudeKey) + '">' +
               '<p class="small muted">키 만들기: platform.claude.com → API Keys → Create Key. 결제 수단 등록이 필요해요.</p>') +
@@ -989,22 +998,24 @@
     if (sc) sc.addEventListener('input', e => {
       settings.claudeKey = e.target.value.trim(); // 토큰처럼 화면이 열려 있는 동안만 기억한다
     });
+    const isLm = () => llm().provider === 'lmstudio';
     const ourl = document.getElementById('s-ourl');
-    if (ourl) ourl.addEventListener('input', e => setLlm({ ollamaUrl: e.target.value.trim() }));
+    if (ourl) ourl.addEventListener('input', e => setLlm(isLm() ? { lmUrl: e.target.value.trim() } : { ollamaUrl: e.target.value.trim() }));
     const omodel = document.getElementById('s-omodel');
-    if (omodel) omodel.addEventListener('input', e => setLlm({ ollamaModel: e.target.value.trim() }));
+    if (omodel) omodel.addEventListener('input', e => setLlm(isLm() ? { lmModel: e.target.value.trim() } : { ollamaModel: e.target.value.trim() }));
     const olist = document.getElementById('s-olist');
     if (olist) olist.addEventListener('click', async () => {
       const out = document.getElementById('s-olist-out');
       out.innerHTML = '<span class="small muted">불러오는 중…</span>';
       try {
         const mod = await import('./proofread.js');
-        const names = await mod.ollamaModels(llm().ollamaUrl);
+        const cur = isLm() ? llm().lmModel : llm().ollamaModel;
+        const names = isLm() ? await mod.lmstudioModels(llm().lmUrl) : await mod.ollamaModels(llm().ollamaUrl);
         out.innerHTML = names.length
-          ? names.map(n => '<button type="button" class="chip' + (n === llm().ollamaModel ? ' on' : '') + '" data-model="' + esc(n) + '">' + esc(n) + '</button>').join('')
-          : '<span class="small muted">설치된 모델이 없어요. 터미널에서 ollama pull 로 받아주세요.</span>';
+          ? names.map(n => '<button type="button" class="chip' + (n === cur ? ' on' : '') + '" data-model="' + esc(n) + '">' + esc(n) + '</button>').join('')
+          : '<span class="small muted">' + (isLm() ? 'LM Studio에 받아둔 모델이 없어요.' : '설치된 모델이 없어요. 터미널에서 ollama pull 로 받아주세요.') + '</span>';
         out.querySelectorAll('[data-model]').forEach(c => c.addEventListener('click', () => {
-          setLlm({ ollamaModel: c.dataset.model }); omodel.value = c.dataset.model;
+          setLlm(isLm() ? { lmModel: c.dataset.model } : { ollamaModel: c.dataset.model }); omodel.value = c.dataset.model;
           out.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c));
         }));
       } catch (e) {

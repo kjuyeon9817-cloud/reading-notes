@@ -119,3 +119,57 @@ export async function proofreadOllama(url, model, fields) {
   catch (e) { throw new Error('모델이 형식에 맞지 않는 답을 줬어요. 다시 살펴보기를 눌러주세요.'); }
   return clean(fields, parsed.suggestions);
 }
+
+// LM Studio: OpenAI 호환 서버 (기본 http://127.0.0.1:1234). 서버 설정에서 Enable CORS를 켜야 한다.
+function lmBase(url) { return (url || 'http://127.0.0.1:1234').replace(/\/+$/, ''); }
+function lmError(e) {
+  return new Error('LM Studio에 연결하지 못했어요. LM Studio의 Developer 탭에서 서버가 켜져 있는지(Status: Running), 서버 설정에서 Enable CORS가 켜져 있는지 확인해 주세요. (' + (e.message || e) + ')');
+}
+// 추론 모델이 본문에 섞어 내는 <think>…</think> 제거 (닫히지 않은 것도)
+export function stripThink(s) {
+  return String(s || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').trim();
+}
+
+export async function lmstudioModels(url) {
+  let res;
+  try { res = await fetch(lmBase(url) + '/v1/models'); } catch (e) { throw lmError(e); }
+  if (!res.ok) throw new Error('LM Studio 응답 오류 ' + res.status);
+  const j = await res.json();
+  return (j.data || []).map(m => m.id).filter(id => !/embed/i.test(id));
+}
+
+export async function proofreadLMStudio(url, model, fields) {
+  let res;
+  try {
+    res = await fetch(lmBase(url) + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        stream: false,
+        temperature: 0,
+        max_tokens: 4096, // 추론 모델은 생각하는 데도 토큰을 쓴다
+        response_format: { type: 'json_schema', json_schema: { name: 'proofread', strict: true, schema: SCHEMA } },
+        messages: [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: JSON.stringify({ fields: fields }) }
+        ]
+      })
+    });
+  } catch (e) { throw lmError(e); }
+  if (!res.ok) {
+    let msg = '';
+    try { const j = await res.json(); msg = (j.error && (j.error.message || j.error)) || ''; } catch (e) { /* ignore */ }
+    throw new Error('LM Studio 응답 오류 ' + res.status + ' ' + msg);
+  }
+  const j = await res.json();
+  const choice = j.choices && j.choices[0];
+  if (choice && choice.finish_reason === 'length') throw new Error('모델이 생각하다가 글자 수 한도에 걸렸어요. 다시 살펴보기를 눌러주세요.');
+  let parsed;
+  try {
+    const raw = stripThink(choice && choice.message && choice.message.content);
+    const m = raw.match(/\{[\s\S]*\}/);
+    parsed = JSON.parse(m ? m[0] : raw);
+  } catch (e) { throw new Error('모델이 형식에 맞지 않는 답을 줬어요. 다시 살펴보기를 눌러주세요.'); }
+  return clean(fields, parsed.suggestions);
+}
