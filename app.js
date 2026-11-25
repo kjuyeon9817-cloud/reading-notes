@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261125f';
+  const APP_VERSION = '20261126a';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -375,6 +375,7 @@
   function go(v) { view = v; render(); window.scrollTo(0, 0); }
 
   function render() {
+    if (view.name !== 'video' && videoHandle) { videoHandle.stop(); videoHandle = null; }
     if (view.name === 'book' && (!books[view.bookId] || books[view.bookId].trashedAt)) view = { name: 'list' };
     if (view.name === 'list') renderList();
     else if (view.name === 'newbook') renderBookForm(null);
@@ -383,6 +384,7 @@
     else if (view.name === 'settings') renderSettings();
     else if (view.name === 'export') renderExport();
     else if (view.name === 'dayexport') renderDayExport();
+    else if (view.name === 'video') renderVideo();
   }
 
   function sortedBooks(status) {
@@ -935,13 +937,13 @@
       body = restyleHtml(entry);
     } else if (tab === 'long') {
       body = '<p class="small muted">하루 한 권만으로는 짧을 수 있어요. 목록 화면의 "오늘 기록으로 롱폼 대본 만들기"는 오늘 읽은 책을 모두 묶어줘요.</p>' +
-        scriptHtml(F.longScript(book, entry, opts), 'o-long');
+        videoBtn() + scriptHtml(F.longScript(book, entry, opts), 'o-long');
     } else {
       const qs = (entry.quotes || []).filter(q => q.text && q.text.trim());
       const qi = Math.min(view.qi || 0, Math.max(qs.length - 1, 0));
       body = (qs.length > 1 ? '<label>쓸 문장 고르기</label><div class="date-chips">' + qs.map((q, i) =>
         '<button type="button" class="chip' + (i === qi ? ' on' : '') + '" data-qpick="' + i + '">문장 ' + (i + 1) + '</button>').join('') + '</div>' : '') +
-        scriptHtml(F.shortScript(book, entry, { quoteIndex: qi }), 'o-short');
+        videoBtn() + scriptHtml(F.shortScript(book, entry, { quoteIndex: qi }), 'o-short');
     }
     app.innerHTML =
       '<button class="back" type="button" id="back">← ' + esc(book.title) + '</button>' +
@@ -954,6 +956,8 @@
     app.querySelectorAll('[data-tab]').forEach(el => el.addEventListener('click', () => { view.tab = el.dataset.tab; render(); }));
     app.querySelectorAll('[data-qpick]').forEach(el => el.addEventListener('click', () => { view.qi = Number(el.dataset.qpick); render(); }));
     if (entry && F.hasContent(entry)) bindProof(book, entry);
+    const vb = document.getElementById('mk-video');
+    if (vb) vb.addEventListener('click', () => go({ name: 'video', kind: tab === 'long' ? 'long' : 'short', bookId: book.id, date: view.date, qi: view.qi || 0, from: view }));
     if (tab === 'restyle' && entry && F.hasContent(entry)) bindRestyle(book, entry);
     bindCopy();
   }
@@ -970,11 +974,72 @@
       '<h1>하루 롱폼 대본</h1>' +
       '<div class="date-bar"><input type="date" id="pick-date" value="' + esc(date) + '" aria-label="날짜"></div>' +
       '<p class="muted small">' + fmtDate(date) + '에 기록한 ' + items.length + '권을 한 영상으로 묶었어요.</p>' +
-      '<div class="card">' + (items.length ? scriptHtml(F.dayLongScript(items, { intro: state.intro, outro: state.outro }), 'o-day') :
+      '<div class="card">' + (items.length ? videoBtn() + scriptHtml(F.dayLongScript(items, { intro: state.intro, outro: state.outro }), 'o-day') :
         '<div class="empty">이 날 기록한 책이 없어요.</div>') + '</div>';
     document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
     document.getElementById('pick-date').addEventListener('change', e => { if (e.target.value) go({ name: 'dayexport', date: e.target.value }); });
+    const vb = document.getElementById('mk-video');
+    if (vb) vb.addEventListener('click', () => go({ name: 'video', kind: 'day', date: date, from: view }));
     bindCopy();
+  }
+
+  // ---------- 3단계: 모션그래픽 + 더빙 영상 ----------
+  function videoBtn() {
+    return '<div class="video-cta"><div><strong>🎬 이 대본으로 더빙 영상 만들기</strong><div class="small muted">장면마다 주제에 맞는 모션그래픽이 움직이고, 내 목소리로 한 줄씩 녹음해요.</div></div>' +
+      '<button class="btn arrow" type="button" id="mk-video">시작</button></div>';
+  }
+
+  var videoHandle = null;
+  async function renderVideo() {
+    const back = () => go(view.from || { name: 'list' });
+    app.innerHTML = '<p class="muted">영상 화면을 여는 중…</p>';
+    let mod;
+    try { mod = await import('./video.js?v=' + APP_VERSION); }
+    catch (e) { app.innerHTML = '<p class="notice">영상 기능을 불러오지 못했어요: ' + esc(e.message) + '</p>'; return; }
+    const opts = { intro: state.intro, outro: state.outro };
+    let items, title, vertical, scenes = [];
+    if (view.kind === 'day') {
+      const date = view.date;
+      items = Object.values(books).filter(b => !b.trashedAt).map(b => ({ book: b, entry: getEntry(b, date) }))
+        .filter(it => it.entry && F.hasContent(it.entry))
+        .sort((a, b) => (a.book.startDate || '').localeCompare(b.book.startDate || ''));
+      title = fmtDate(date) + ' · ' + items.length + '권';
+      vertical = false;
+      const first = items[0] && items[0].book;
+      if (opts.intro && opts.intro.trim()) scenes.push({ part: '시작', screen: '', say: opts.intro.trim(), book: first });
+      items.forEach(it => {
+        const one = F.longScript(it.book, it.entry, {}).scenes;
+        one[0].part = it.book.title;
+        one.forEach(s => { s.book = it.book; scenes.push(s); });
+      });
+      if (opts.outro && opts.outro.trim()) scenes.push({ part: '마무리', screen: '', say: opts.outro.trim(), book: items[items.length - 1] && items[items.length - 1].book });
+    } else {
+      const book = books[view.bookId];
+      const entry = book && getEntry(book, view.date);
+      if (!entry || !F.hasContent(entry)) { back(); return; }
+      items = [{ book, entry }];
+      vertical = view.kind === 'short';
+      const sc = vertical ? F.shortScript(book, entry, { quoteIndex: view.qi || 0 }) : F.longScript(book, entry, opts);
+      sc.scenes.forEach(s => { s.book = book; scenes.push(s); });
+      title = book.title + ' · ' + F.sessionNumber(book, view.date) + '번째 날';
+    }
+    if (!scenes.length) { back(); return; }
+    // 장면 정보를 영상 모듈에 맞게 바꾼다
+    const withSec = scenes.map(s => {
+      const b = s.book || {};
+      const sec = s.sec || Math.max(2, Math.round((s.say || '').length / 5) + 2);
+      return { part: s.part, screen: s.screen, say: s.say, same: s.same, sec, bookId: b.id, motion: mod.pickMotion(b),
+        book: (b.title || '') + (b.id && view.date ? ' · ' + F.sessionNumber(b, view.date) + '번째 날' : '') };
+    });
+    const motions = items.map(it => ({ bookId: it.book.id, title: it.book.title, motion: mod.pickMotion(it.book) }));
+    const storeKey = [view.kind, view.kind === 'day' ? 'all' : view.bookId, view.date, view.kind === 'short' ? (view.qi || 0) : ''].join('|');
+    const safe = String(title).replace(/[\\/:*?"<>|·]+/g, ' ').replace(/\s+/g, '-');
+    if (videoHandle) videoHandle.stop();
+    videoHandle = await mod.mount(app, {
+      title, scenes: withSec, vertical, storeKey, motions, fileName: safe + (vertical ? '-shorts' : '-long'),
+      onMotion: (bid, m) => { const b = books[bid]; if (b) { b.motion = m; saveBook(b, { quiet: true }); } },
+      onBack: () => { videoHandle = null; back(); }
+    });
   }
 
   function renderRecovery() {

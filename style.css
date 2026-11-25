@@ -292,3 +292,18 @@ input:focus, textarea:focus, select:focus { outline-color: var(--yellow-deep); }
 }
 .brand, .sync-status, .icon-btn { white-space: nowrap; }
 @media (max-width: 480px) { .nav-cta { display: none; } .sync-status { font-size: .72rem; } }
+
+/* 3단계: 더빙 영상 */
+.video-cta { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--accent-soft); border-radius: 16px; padding: 14px 16px; margin-bottom: 14px; }
+.video-wrap { margin: 12px auto; border-radius: 20px; overflow: hidden; box-shadow: 0 12px 32px rgba(230, 180, 30, .22); background: #fffdf5; }
+.video-wrap canvas { display: block; width: 100%; height: auto; }
+.video-wrap.v { max-width: 340px; }
+.video-wrap.h { max-width: 760px; }
+.center { text-align: center; justify-content: center; }
+.dub-row { border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-top: 10px; cursor: pointer; background: var(--bg); }
+.dub-row.done { border-color: var(--yellow); }
+.dub-head { display: flex; align-items: center; gap: 8px; }
+.dub-no { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--line); font-size: .78rem; font-weight: 700; }
+.dub-row.done .dub-no { background: var(--yellow); }
+.dub-say { font-size: 1.05rem; line-height: 1.7; margin: 8px 0 4px; white-space: pre-wrap; }
+.small-btn { padding: 6px 14px; font-size: .85rem; }
