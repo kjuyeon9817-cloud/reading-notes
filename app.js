@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126f';
+  const APP_VERSION = '20261126g';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -863,7 +863,7 @@
     }));
   }
 
-  const QUOTES_PER_PAGE = 20;
+  const QUOTES_PER_PAGE = 10;
 
   // 발췌 문장: 한 줄 목록으로 접어 두고, 누른 문장만 펼쳐서 쪽수·고른 이유와 함께 고친다.
   function quotesListHtml(quotes, book) {
@@ -887,7 +887,7 @@
     }).join('');
     const pager = pages > 1 ? '<div class="pager">' + Array.from({ length: pages }, (_, p) =>
       '<button type="button" class="chip' + (p === page ? ' on' : '') + '" data-qpage="' + p + '">' +
-      (p * QUOTES_PER_PAGE + 1) + '–' + Math.min((p + 1) * QUOTES_PER_PAGE, quotes.length) + '</button>').join('') + '</div>' : '';
+      (p + 1) + '페이지 · ' + (p * QUOTES_PER_PAGE + 1) + '–' + Math.min((p + 1) * QUOTES_PER_PAGE, quotes.length) + '</button>').join('') + '</div>' : '';
     return (quotes.length ? '<p class="small muted">' + quotes.length + '개 · 누르면 쪽수와 고른 이유가 보여요</p>' : '') +
       '<div id="quotes">' + rows + '</div>' + pager;
   }
