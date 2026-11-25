@@ -14,6 +14,12 @@
 
   function parseDay(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
   function dayNumber(book, date) { return Math.round((parseDay(date) - parseDay(book.startDate)) / 86400000) + 1; }
+  // 이 책을 기록한 날 중 몇 번째 날인지 (건너뛴 날은 세지 않음)
+  function sessionNumber(book, date) {
+    const ds = new Set((book.entries || []).filter(e => e.date <= date && hasContent(e)).map(e => e.date));
+    ds.add(date);
+    return ds.size;
+  }
   function fmtDate(s) {
     const d = parseDay(s);
     return d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
@@ -53,12 +59,12 @@
   // ---------- 네이버 블로그 ----------
   function blog(book, entry, opts) {
     opts = opts || {};
-    const n = dayNumber(book, entry.date);
-    const title = '[독서노트 ' + n + '일째] ' + t(book.title) + (has(book.author) ? ' - ' + t(book.author) : '');
+    const n = sessionNumber(book, entry.date);
+    const title = '[독서노트 ' + n + '번째 날] ' + t(book.title) + (has(book.author) ? ' - ' + t(book.author) : '');
     const out = [];
     out.push('📖 ' + t(book.title));
     out.push('저자: ' + (t(book.author) || '-') + ' · ' + (book.format === 'ebook' ? '전자책' : '종이책'));
-    out.push('읽기 시작: ' + fmtDate(book.startDate) + ' · 오늘 ' + n + '일째' + (has(entry.pages) ? ' · ' + t(entry.pages) + '까지' : ''));
+    out.push('읽기 시작: ' + fmtDate(book.startDate) + ' · ' + n + '번째 날 (' + fmtDate(entry.date) + ')' + (has(entry.pages) ? ' · ' + t(entry.pages) + '까지' : ''));
     out.push('');
     if (has(book.whyReading) && (isFirstEntry(book, entry) || opts.alwaysWhy)) {
       out.push('■ 이 책을 읽게 된 이유', '', t(book.whyReading), '');
@@ -108,10 +114,10 @@
     return parts;
   }
   function threads(book, entry) {
-    const n = dayNumber(book, entry.date);
+    const n = sessionNumber(book, entry.date);
     const blocks = [];
     const qs = quotes(entry);
-    let head = '📖 ' + t(book.title) + ' · ' + n + '일째';
+    let head = '📖 ' + t(book.title) + ' · ' + n + '번째 날';
     if (qs.length) head += '\n\n"' + t(qs[0].text) + '"' + (has(qs[0].reason) ? '\n\n' + t(qs[0].reason) : '');
     else if (has(entry.summary)) head += '\n\n' + t(entry.summary);
     blocks.push(head);
@@ -134,9 +140,9 @@
 
   function longScript(book, entry, opts) {
     opts = opts || {};
-    const n = dayNumber(book, entry.date);
+    const n = sessionNumber(book, entry.date);
     const scenes = [];
-    scenes.push({ part: '시작', screen: t(book.title) + '\n' + (t(book.author) || '') + '\n' + n + '일째', say: has(opts.intro) ? t(opts.intro) : '' });
+    scenes.push({ part: '시작', screen: t(book.title) + '\n' + (t(book.author) || '') + '\n' + n + '번째 날', say: has(opts.intro) ? t(opts.intro) : '' });
     if (has(book.whyReading) && isFirstEntry(book, entry)) scenes.push({ part: '읽게 된 이유', screen: '이 책을 읽게 된 이유', say: t(book.whyReading) });
     const prev = previousChecks(book, entry);
     if (prev) prev.items.forEach(a => scenes.push({
@@ -157,10 +163,10 @@
   function shortScript(book, entry, opts) {
     opts = opts || {};
     const qi = opts.quoteIndex || 0;
-    const n = dayNumber(book, entry.date);
+    const n = sessionNumber(book, entry.date);
     const q = quotes(entry)[qi];
     const scenes = [];
-    scenes.push({ part: '첫 화면', screen: t(book.title) + ' · ' + n + '일째', say: '' });
+    scenes.push({ part: '첫 화면', screen: t(book.title) + ' · ' + n + '번째 날', say: '' });
     if (q) {
       scenes.push({ part: '문장', screen: t(q.text), say: t(q.text) });
       if (has(q.reason)) scenes.push({ part: '고른 이유', screen: '', say: t(q.reason) });
@@ -196,7 +202,7 @@
   };
 
   function recordText(book, entry) {
-    const lines = ['책: ' + t(book.title) + (has(book.author) ? ' (' + t(book.author) + ')' : '') + ' · ' + dayNumber(book, entry.date) + '일째 읽는 중'];
+    const lines = ['책: ' + t(book.title) + (has(book.author) ? ' (' + t(book.author) + ')' : '') + ' · 이 책을 읽은 ' + sessionNumber(book, entry.date) + '번째 날'];
     if (has(book.whyReading)) lines.push('', '[이 책을 읽게 된 이유]', t(book.whyReading));
     const prev = previousChecks(book, entry);
     if (prev) {
@@ -281,7 +287,7 @@
 
   return {
     blog: blog, threads: threads, longScript: longScript, dayLongScript: dayLongScript, hasContent: hasContent, shortScript: shortScript,
-    scriptText: scriptText, dayNumber: dayNumber, THREADS_LIMIT: THREADS_LIMIT,
+    scriptText: scriptText, dayNumber: dayNumber, sessionNumber: sessionNumber, THREADS_LIMIT: THREADS_LIMIT,
     restyleMessages: restyleMessages, parsePosts: parsePosts, RS_PLATFORMS: RS_PLATFORMS, RS_FORMATS: RS_FORMATS, RS_TONES: RS_TONES
   };
 });

@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261125b';
+  const APP_VERSION = '20261125c';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -475,10 +475,13 @@
     const book = books[view.bookId];
     const date = view.date || todayStr();
     const entry = getEntry(book, date) || newEntry(date);
+    // 기록한 날을 1, 2, 3… 번호로. 오늘(또는 고른 날)이 아직 비어 있으면 다음 번호로 붙인다.
     const dates = (book.entries || []).filter(e => !entryIsEmpty(e)).map(e => e.date);
-    if (!dates.includes(todayStr())) dates.push(todayStr());
+    if (book.status !== 'done' && !dates.includes(todayStr())) dates.push(todayStr());
     if (!dates.includes(date)) dates.push(date);
-    dates.sort().reverse();
+    dates.sort();
+    const sessionNo = dates.indexOf(date) + 1;
+    const shortDate = d => { const x = parseDay(d); return (x.getMonth() + 1) + '/' + x.getDate(); };
 
     // 아직 저장되지 않은 새 기록이면 입력하는 순간 책에 붙인다
     function live() { return ensureEntry(book, date); }
@@ -503,12 +506,16 @@
       '<textarea id="why" placeholder="왜 이 책을 골랐나요?">' + esc(book.whyReading) + '</textarea></div>' +
 
       '<div class="card">' +
-      '<div class="date-bar"><h2 style="margin:0">' + fmtDate(date) + ' 기록</h2>' +
-      '<input type="date" id="pick-date" value="' + esc(date) + '" aria-label="다른 날짜 기록 보기"></div>' +
-      '<div class="date-chips">' + dates.map(d => '<button type="button" class="chip' + (d === date ? ' on' : '') + '" data-date="' + d + '">' +
-        (d === todayStr() ? '오늘' : fmtDate(d)) + '</button>').join('') + '</div>' +
-      '<label for="pages">오늘 읽은 곳 (선택)</label><input id="pages" type="text" placeholder="예: 45~92쪽, 3장까지" value="' + esc(entry.pages) + '">' +
-      '<div class="actions"><button class="btn small" id="to-export" type="button">이 날 기록으로 포스팅용 글 만들기</button></div>' +
+      '<div class="session-tabs" role="tablist">' + dates.map((d, i) => {
+        const filled = (() => { const e = getEntry(book, d); return e && !entryIsEmpty(e); })();
+        return '<button type="button" role="tab" aria-selected="' + (d === date) + '" class="session' + (d === date ? ' on' : '') + (filled ? '' : ' empty') + '" data-date="' + d + '">' +
+          '<span class="session-no">' + (i + 1) + '</span><span class="session-date">' + (d === todayStr() ? '오늘' : shortDate(d)) + '</span></button>';
+      }).join('') + '</div>' +
+      '<div class="date-bar"><h2 style="margin:0">' + sessionNo + '번째 날 · ' + fmtDate(date) + '</h2></div>' +
+      '<p class="small muted" style="margin:4px 0 0">이 날 읽은 내용만 적어요. 포스팅용 글도 이 날 기록으로만 만들어요. ' +
+      '<label class="inline-date">지난 날 추가 <input type="date" id="pick-date" value="' + esc(date) + '" aria-label="다른 날짜 기록 보기"></label></p>' +
+      '<label for="pages">이 날 읽은 곳 (선택)</label><input id="pages" type="text" placeholder="예: 45~92쪽, 3장까지" value="' + esc(entry.pages) + '">' +
+      '<div class="actions"><button class="btn small" id="to-export" type="button">' + sessionNo + '번째 날 기록으로 포스팅용 글 만들기</button></div>' +
       '</div>' +
 
       '<div class="card"><h2><span class="section-num">2</span>발췌한 문장</h2>' +
@@ -923,7 +930,7 @@
     app.innerHTML =
       '<button class="back" type="button" id="back">← ' + esc(book.title) + '</button>' +
       '<h1>포스팅용 글</h1>' +
-      '<p class="muted small">' + fmtDate(view.date) + ' 기록 · 내가 쓴 문장은 그대로 두고 순서와 형식만 바꿨어요.</p>' +
+      '<p class="muted small">' + F.sessionNumber(book, view.date) + '번째 날 · ' + fmtDate(view.date) + ' 기록만 썼어요 · 내가 쓴 문장은 그대로 두고 순서와 형식만 바꿨어요.</p>' +
       (entry && F.hasContent(entry) ? proofCardHtml() : '') +
       '<div class="date-chips">' + tabs.map(([k, l]) => '<button type="button" class="chip' + (k === tab ? ' on' : '') + '" data-tab="' + k + '">' + l + '</button>').join('') + '</div>' +
       '<div class="card">' + body + '</div>';

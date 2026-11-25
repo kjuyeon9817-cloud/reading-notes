@@ -189,3 +189,17 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .over { color: var(--warn); font-weight: 700; }
 
 a { color: var(--accent); }
+
+.session-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; margin-bottom: 4px; }
+.session {
+  flex: none; display: flex; flex-direction: column; align-items: center; min-width: 52px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 12px;
+  padding: 6px 8px; cursor: pointer; font: inherit;
+}
+.session .session-no { font-size: 1.1rem; font-weight: 800; line-height: 1.2; }
+.session .session-date { font-size: .72rem; color: var(--muted); }
+.session.on { border-color: var(--accent); background: var(--accent-soft); }
+.session.on .session-no { color: var(--accent); }
+.session.empty { border-style: dashed; }
+.inline-date { display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: .85rem; }
+.inline-date input { width: auto; padding: 4px 8px; }
