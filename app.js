@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126i';
+  const APP_VERSION = '20261126j';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -84,7 +84,7 @@
     return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + w + ')';
   }
   function readingDay(book) {
-    const end = book.status === 'done' && book.finishedDate ? book.finishedDate : todayStr();
+    const end = book.status === 'done' && book.finishedDate ? book.finishedDate : book.status === 'paused' && book.pausedDate ? book.pausedDate : todayStr();
     return daysBetween(book.startDate, end) + 1;
   }
 
@@ -397,7 +397,7 @@
   function sortedBooks(status) {
     return Object.values(books)
       .filter(b => !b.trashedAt)
-      .filter(b => (status === 'done' ? b.status === 'done' : b.status !== 'done'))
+      .filter(b => (status === 'done' ? b.status === 'done' : status === 'paused' ? b.status === 'paused' : b.status !== 'done' && b.status !== 'paused'))
       .sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
   }
 
@@ -437,21 +437,24 @@
   }
 
   function renderList() {
+    pausePopped = null;
     const reading = sortedBooks('reading');
     const done = sortedBooks('done');
+    const paused = sortedBooks('paused');
     const t = todayStr();
     const card = b => {
       const todayDone = (() => { const e = getEntry(b, t); return e && !entryIsEmpty(e); })();
       const pend = pendingChecks(b);
-      return '<button class="book-card" data-open="' + esc(b.id) + '" type="button">' +
+      return '<button class="book-card' + (b.status === 'paused' ? ' paused' : '') + '" data-open="' + esc(b.id) + '" type="button">' +
         '<div class="book-cover" style="' + coverTone(b.title) + '">' + esc(b.title || '제목 없음') +
-        '<span class="cover-day">' + (b.status === 'done' ? '완독' : 'DAY ' + readingDay(b)) + '</span></div>' +
+        '<span class="cover-day">' + (b.status === 'done' ? '완독' : b.status === 'paused' ? '⏸ 중단' : 'DAY ' + readingDay(b)) + '</span></div>' +
         '<div class="book-body">' +
         '<div class="meta">' + esc(b.author || '저자 미입력') + ' · ' + (b.format === 'ebook' ? '전자책' : '종이책') +
         (b.topic ? ' · ' + esc(b.topic) : '') + '</div>' +
         '<div class="meta">' + fmtDate(b.startDate) + ' 시작 · <span class="day-count">' + readingDay(b) + '일째</span></div>' +
         '<div class="badges">' +
         (b.status === 'done' ? '<span class="badge">완독 ' + fmtDate(b.finishedDate) + '</span>' :
+          b.status === 'paused' ? '<span class="badge warn">중단 ' + (b.pausedDate ? fmtDate(b.pausedDate) : '') + '</span>' :
           (todayDone ? '<span class="badge ok">오늘 기록함</span>' : '<span class="badge">오늘 기록 전</span>')) +
         (pend ? '<span class="badge warn">실천 체크 ' + pend + '개</span>' : '') +
         '</div></div></button>';
@@ -467,6 +470,7 @@
       '</section>' +
       '<h2 class="list-section-title">지금 읽는 책</h2>' +
       (reading.length ? '<div class="book-list">' + reading.map(card).join('') + '</div>' : '<div class="empty-hero">아직 읽고 있는 책이 없어요</div>') +
+      (paused.length ? '<h2 class="list-section-title">잠시 멈춘 책 · ' + paused.length + '</h2><div class="book-list">' + paused.map(card).join('') + '</div>' : '') +
       (done.length ? '<h2 class="list-section-title">다 읽은 책 · ' + done.length + '</h2><div class="book-list">' + done.map(card).join('') + '</div>' : '') +
       '<p class="foot">하루하루 버티는 사람들에게, 사람의 문장으로</p>';
     app.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => go({ name: 'book', bookId: el.dataset.open, date: todayStr() })));
@@ -527,7 +531,7 @@
     const entry = getEntry(book, date) || newEntry(date);
     // 기록한 날을 1, 2, 3… 번호로. 오늘(또는 고른 날)이 아직 비어 있으면 다음 번호로 붙인다.
     const dates = (book.entries || []).filter(e => !entryIsEmpty(e)).map(e => e.date);
-    if (book.status !== 'done' && !dates.includes(todayStr())) dates.push(todayStr());
+    if (book.status !== 'done' && book.status !== 'paused' && !dates.includes(todayStr())) dates.push(todayStr());
     if (!dates.includes(date)) dates.push(date);
     dates.sort();
     const sessionNo = dates.indexOf(date) + 1;
@@ -545,11 +549,17 @@
       '<p class="muted small">' + esc(book.author || '저자 미입력') + ' · ' + (book.format === 'ebook' ? '전자책' : '종이책') +
       ' · ' + fmtDate(book.startDate) + ' 시작 · <strong class="day-count">' + readingDay(book) + '일째</strong>' +
       (book.status === 'done' ? ' · 완독' : '') + '</p>' +
+      (book.status === 'paused' ? '<div class="pause-banner"><div><strong>⏸ ' + (book.pausedDate ? fmtDate(book.pausedDate) + '에 ' : '') + '읽기를 멈춘 책이에요</strong>' +
+        '<div class="small">' + (book.pauseReason ? '이유: ' + esc(book.pauseReason) : '이유를 적지 않았어요') + '</div></div>' +
+        '<button class="btn small" id="resume" type="button">다시 읽기</button></div>' : '') +
       '<div class="actions">' +
       '<button class="btn ghost small" id="edit-book" type="button">책 정보 고치기</button>' +
       (book.status === 'done'
         ? '<button class="btn ghost small" id="reopen" type="button">다시 읽는 중으로</button>'
-        : '<button class="btn ghost small" id="finish" type="button">다 읽었어요</button>') +
+        : book.status === 'paused'
+          ? '<button class="btn ghost small" id="pause-edit" type="button">중단 이유 고치기</button>'
+          : '<button class="btn ghost small" id="finish" type="button">다 읽었어요</button>' +
+            '<button class="btn ghost small" id="pause" type="button">⏸ 읽기 중단</button>') +
       '</div>' +
 
       '<div class="card"><h2><span class="section-num">1</span>이 책을 읽게 된 이유</h2>' +
@@ -594,6 +604,23 @@
     document.getElementById('edit-book').addEventListener('click', () => go({ name: 'editbook', bookId: book.id }));
     const fin = document.getElementById('finish');
     if (fin) fin.addEventListener('click', () => { book.status = 'done'; book.finishedDate = todayStr(); commit(); render(); });
+    const askPause = () => pauseModal(book, reason => {
+      if (book.status !== 'paused') { book.status = 'paused'; book.pausedDate = todayStr(); }
+      book.pauseReason = reason; pausePopped = book.id; commit(); render();
+    });
+    const pz = document.getElementById('pause'); if (pz) pz.addEventListener('click', askPause);
+    const pe = document.getElementById('pause-edit'); if (pe) pe.addEventListener('click', askPause);
+    const rs = document.getElementById('resume');
+    if (rs) rs.addEventListener('click', () => resumeBook(book));
+    // 중단한 책을 열면 이유를 먼저 보여준다 (책에 들어올 때 한 번)
+    if (book.status === 'paused' && pausePopped !== book.id) {
+      pausePopped = book.id;
+      showModal('<h2>⏸ 잠시 멈춘 책이에요</h2>' +
+        '<p class="muted small">' + esc(book.title) + (book.pausedDate ? ' · ' + fmtDate(book.pausedDate) + '에 멈춤' : '') + '</p>' +
+        '<div class="pause-reason">' + (book.pauseReason ? esc(book.pauseReason) : '<span class="muted">이유를 적지 않았어요.</span>') + '</div>' +
+        '<div class="actions"><button class="btn" type="button" data-m="resume">다시 읽기</button><button class="btn ghost" type="button" data-m="close">기록만 볼게요</button></div>',
+        (act, close) => { close(); if (act === 'resume') resumeBook(book); });
+    }
     const reo = document.getElementById('reopen');
     if (reo) reo.addEventListener('click', () => { book.status = 'reading'; book.finishedDate = ''; commit(); render(); });
 
@@ -657,6 +684,34 @@
     function bindEl(el, set) {
       el.addEventListener('input', () => { set(el.value); commit(); });
     }
+  }
+
+  // ---------- 팝업 · 읽기 중단 ----------
+  var pausePopped = null; // 책 목록으로 돌아가면 다시 보여준다
+  function showModal(inner, onAction) {
+    const old = document.getElementById('modal'); if (old) old.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'modal'; wrap.className = 'modal-back';
+    wrap.innerHTML = '<div class="modal" role="dialog" aria-modal="true">' + inner + '</div>';
+    document.body.appendChild(wrap);
+    const close = () => wrap.remove();
+    wrap.addEventListener('click', e => {
+      if (e.target === wrap) { close(); return; }
+      const b = e.target.closest('[data-m]'); if (b) onAction(b.dataset.m, close, wrap);
+    });
+    document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+    const f = wrap.querySelector('textarea, button'); if (f) f.focus();
+    return wrap;
+  }
+  function pauseModal(book, done) {
+    showModal('<h2>⏸ 읽기 중단</h2><p class="small muted">왜 멈추는지 적어 두면, 나중에 이 책을 열었을 때 보여줘요. 기록은 그대로 남아요.</p>' +
+      '<textarea id="m-reason" style="min-height:90px" placeholder="예: 지금 상황과 안 맞아서, 너무 어려워서, 다른 책이 더 급해서">' + esc(book.pauseReason || '') + '</textarea>' +
+      '<div class="actions"><button class="btn" type="button" data-m="ok">' + (book.status === 'paused' ? '저장' : '중단하기') + '</button><button class="btn ghost" type="button" data-m="close">취소</button></div>',
+      (act, close, wrap) => { if (act === 'ok') { const v = wrap.querySelector('#m-reason').value.trim(); close(); done(v); } else close(); });
+  }
+  function resumeBook(book) {
+    book.status = 'reading'; book.resumedDate = todayStr(); saveBook(book);
+    go({ name: 'book', bookId: book.id, date: todayStr() });
   }
 
   // ---------- 옵시디언·wikiagent로 보내기 ----------
