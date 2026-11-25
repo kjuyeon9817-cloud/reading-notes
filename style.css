@@ -349,3 +349,14 @@ select { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(-
 .connect-card p { margin: 6px 0 10px; }
 .check-line { display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px; }
 .check-line input { width: auto; }
+
+/* 주제로 묶기 · 여러 원고 */
+.theme-box { background: var(--accent-soft); border-radius: 14px; padding: 12px 14px; margin: 10px 0 14px; }
+.theme-item { background: var(--bg); border-radius: 12px; padding: 10px 12px; margin-top: 8px; }
+.theme-quotes { font-size: .85rem; margin: 6px 0 2px; color: var(--ink); }
+.theme-item .chip { font-weight: 600; }
+.draft-tabs { margin-top: 6px; }
+.draft-pick .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+p.over, .small.over { color: var(--warn); }
+.draft-card .date-chips, .draft-pick .date-chips { flex-wrap: wrap; overflow: visible; }
+.draft-card .chip, .draft-pick .chip { white-space: normal; text-align: left; }

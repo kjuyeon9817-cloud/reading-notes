@@ -48,17 +48,28 @@
 
   // ---------- 오늘의 원고 ----------
   // 기록(나를 위한 메모)과 따로, 보는 사람을 위해 내가 다시 쓴 3~5줄. 하나라도 적었으면 원고를 쓴다.
-  function draftOf(entry) {
-    const d = entry && entry.draft;
-    if (!d || !(has(d.hook) || has(d.story) || has(d.action) || has(d.ask))) return null;
-    const qs = quotes(entry);
-    const quote = qs.find(q => q.id && q.id === d.starId) || null;
-    return { hook: t(d.hook), story: t(d.story), action: t(d.action), ask: t(d.ask), quote: quote };
+  // 하루에 원고 여러 개 (entry.drafts). 예전 하나짜리(entry.draft)도 읽는다.
+  function draftList(entry) {
+    if (!entry) return [];
+    if (Array.isArray(entry.drafts)) return entry.drafts;
+    return entry.draft ? [Object.assign({ id: 'd0' }, entry.draft)] : [];
   }
-  function draftSeconds(entry) {
-    const d = draftOf(entry);
+  function filledDraft(d) { return !!d && (has(d.hook) || has(d.story) || has(d.action) || has(d.ask)); }
+  function draftOf(entry, id) {
+    if (id === 'none') return null;
+    const list = draftList(entry).filter(filledDraft);
+    const d = (id && list.find(x => x.id === id)) || list[0];
+    if (!d) return null;
+    const qs = quotes(entry);
+    const ids = Array.isArray(d.starIds) ? d.starIds : (d.starId ? [d.starId] : []);
+    const ql = ids.map(i => qs.find(q => q.id === i)).filter(Boolean);
+    return { id: d.id, theme: t(d.theme), hook: t(d.hook), story: t(d.story), action: t(d.action), ask: t(d.ask), quotes: ql, quote: ql[0] || null };
+  }
+  function draftSeconds(entry, id) {
+    const d = draftOf(entry, id);
     if (!d) return 0;
-    return seconds([d.hook, d.quote ? d.quote.text : '', d.story, d.action, d.ask].join(' ')) + 2 * 5;
+    const n = [d.hook, d.story, d.action, d.ask].filter(Boolean).length + d.quotes.length;
+    return seconds([d.hook, d.quotes.map(q => q.text).join(' '), d.story, d.action, d.ask].join(' ')) + 2 * n;
   }
   function hashtags(book, extra) {
     const tags = ['#독서노트', '#매일독서', tag(book.title)];
@@ -77,9 +88,9 @@
     opts = opts || {};
     const n = sessionNumber(book, entry.date);
     const title = '[독서노트 ' + n + '번째 날] ' + t(book.title) + (has(book.author) ? ' - ' + t(book.author) : '');
+    const dr = draftOf(entry, opts.draftId);
+    if (dr) return draftBlog(book, entry, dr, opts);
     const out = [];
-    const dr = draftOf(entry);
-    if (dr && dr.hook) out.push(dr.hook, '');
     out.push('📖 ' + t(book.title));
     out.push('저자: ' + (t(book.author) || '-') + ' · ' + (book.format === 'ebook' ? '전자책' : '종이책'));
     out.push('읽기 시작: ' + fmtDate(book.startDate) + ' · ' + n + '번째 날 (' + fmtDate(entry.date) + ')' + (has(entry.pages) ? ' · ' + t(entry.pages) + '까지' : ''));
@@ -102,7 +113,6 @@
         out.push('');
       });
     }
-    if (dr && dr.story) out.push('■ 이 문장에서 멈춘 이유', '', dr.story, '');
     if (has(entry.summary)) out.push('■ 오늘 읽은 내용', '', t(entry.summary), '');
     const as = apps(entry);
     if (as.length) {
@@ -110,9 +120,28 @@
       as.forEach((a, i) => out.push((i + 1) + '. ' + t(a.text)));
       out.push('', '내일 해봤는지 다시 적을게요.', '');
     }
-    if (dr && dr.ask) out.push(dr.ask, '');
     if (has(opts.outro)) out.push(t(opts.outro), '');
     out.push(hashtags(book));
+    return { title: title, body: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
+  }
+
+  // 원고로 쓰는 블로그: 주제 하나, 문장 1~2개, 내 이야기 중심
+  function draftBlog(book, entry, dr, opts) {
+    const n = sessionNumber(book, entry.date);
+    const head = dr.theme || dr.hook || t(book.title);
+    const title = head + ' | 『' + t(book.title) + '』 독서노트 ' + n + '번째 날';
+    const out = [];
+    if (dr.hook) out.push(dr.hook, '');
+    dr.quotes.forEach(q => {
+      const where = [tocTitle(book, q), t(q.page)].filter(Boolean).join(' · ');
+      out.push('" ' + t(q.text) + ' "' + (where ? ' (' + where + ')' : ''), '');
+    });
+    if (dr.story) out.push(dr.story, '');
+    if (dr.action) out.push('■ 오늘 해볼 것 하나', '', dr.action, '');
+    if (dr.ask) out.push(dr.ask, '');
+    out.push('─', '📖 ' + t(book.title) + (has(book.author) ? ' · ' + t(book.author) : '') + ' · ' + n + '번째 날 (' + fmtDate(entry.date) + ')', '');
+    if (has(opts.outro)) out.push(t(opts.outro), '');
+    out.push(hashtags(book, dr.theme ? [tag(dr.theme)] : []));
     return { title: title, body: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
   }
 
@@ -134,14 +163,14 @@
     if (rest) parts.push(rest);
     return parts;
   }
-  function threads(book, entry) {
+  function threads(book, entry, opts) {
     const n = sessionNumber(book, entry.date);
     const blocks = [];
-    const dr = draftOf(entry);
+    const dr = draftOf(entry, opts && opts.draftId);
     if (dr) {
       // 원고가 있으면 원고만으로 짧고 깔끔하게
       let head = (dr.hook ? dr.hook + '\n\n' : '') + '📖 ' + t(book.title) + ' · ' + n + '번째 날';
-      if (dr.quote) head += '\n\n"' + t(dr.quote.text) + '"';
+      dr.quotes.forEach(q => { head += '\n\n"' + t(q.text) + '"'; });
       blocks.push(head);
       if (dr.story) blocks.push(dr.story);
       if (dr.action) blocks.push('오늘 해볼 것 하나\n\n' + dr.action);
@@ -177,7 +206,7 @@
     opts = opts || {};
     const n = sessionNumber(book, entry.date);
     const scenes = [];
-    const dr = draftOf(entry);
+    const dr = draftOf(entry, opts.draftId);
     if (dr && dr.hook) scenes.push({ part: '첫 마디', screen: dr.hook, say: dr.hook });
     scenes.push({ part: '시작', screen: t(book.title) + '\n' + (t(book.author) || '') + '\n' + n + '번째 날', say: has(opts.intro) ? t(opts.intro) : '' });
     if (has(book.whyReading) && isFirstEntry(book, entry)) scenes.push({ part: '읽게 된 이유', screen: '이 책을 읽게 된 이유', say: t(book.whyReading) });
@@ -206,10 +235,10 @@
     const n = sessionNumber(book, entry.date);
     const q = quotes(entry)[qi];
     const scenes = [];
-    const dr = draftOf(entry);
+    const dr = draftOf(entry, opts.draftId);
     if (dr) {
       scenes.push(dr.hook ? { part: '첫 마디', screen: dr.hook, say: dr.hook } : { part: '첫 화면', screen: t(book.title) + ' · ' + n + '번째 날', say: '' });
-      if (dr.quote) scenes.push({ part: '오늘의 문장', screen: t(dr.quote.text), say: t(dr.quote.text) });
+      dr.quotes.forEach((q, i) => scenes.push({ part: dr.quotes.length > 1 ? '오늘의 문장 ' + (i + 1) : '오늘의 문장', screen: t(q.text), say: t(q.text) }));
       if (dr.story) scenes.push({ part: '내 이야기', screen: '', say: dr.story });
       if (dr.action) scenes.push({ part: '오늘 해볼 것', screen: dr.action, say: dr.action });
       if (dr.ask) scenes.push({ part: '여러분은요?', screen: dr.ask, say: dr.ask });
@@ -241,7 +270,7 @@
   }
 
   // ---------- 어투·목표 독자 맞춤 재구성 (AI에게 줄 지시) ----------
-  const RS_PLATFORMS = { threads: { name: 'Threads', limit: 500 }, x: { name: 'X(트위터)', limit: 280 } };
+  const RS_PLATFORMS = { threads: { name: 'Threads', limit: 500 }, x: { name: 'X(트위터)', limit: 280 }, blog: { name: '네이버 블로그', limit: 2500 } };
   const RS_FORMATS = { single: { label: '단일 포스트', count: '1개' }, short: { label: '숏 스레드', count: '4~5개' }, long: { label: '롱 스레드', count: '7~9개' } };
   const RS_TONES = {
     viral: { label: '바이럴 후킹', prompt: '바이럴 후킹형 — 강렬한 호기심 유발, 짧고 임팩트 있는 문장, 반전과 넘버링 활용' },
@@ -311,23 +340,24 @@
         (a.practiced === true && has(a.result) ? ' → ' + t(a.result) : '') + (a.practiced === false && has(a.reason) ? ' → 못 한 이유: ' + t(a.reason) : '')));
       L.push('');
     }
-    const dr = draftOf(entry);
-    if (dr) {
-      L.push('## 오늘의 원고', '');
+    draftList(entry).filter(filledDraft).forEach((d0, k) => {
+      const dr = draftOf(entry, d0.id);
+      L.push('## 원고 ' + (k + 1) + (dr.theme ? ': ' + dr.theme : ''), '');
       if (dr.hook) L.push('- 첫 한 줄: ' + dr.hook);
-      if (dr.quote) L.push('- 오늘의 문장: "' + t(dr.quote.text).replace(/\n/g, ' ') + '"');
+      dr.quotes.forEach(q => L.push('- 문장: "' + t(q.text).replace(/\n/g, ' ') + '"'));
       if (dr.story) L.push('- 내 이야기: ' + dr.story);
       if (dr.action) L.push('- 하나의 실천: ' + dr.action);
       if (dr.ask) L.push('- 마지막 질문: ' + dr.ask);
       L.push('');
-    }
+    });
     return { fileName: safeName(book.title) + ' - ' + n + '번째 날.md', folder: entry.date, text: L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n' };
   }
 
   // 원고 코치: 고쳐 쓰지 않고 짚어만 준다
-  function coachMessages(book, entry) {
-    const d = (entry && entry.draft) || {};
-    const q = quotes(entry).find(x => x.id && x.id === d.starId);
+  function coachMessages(book, entry, id) {
+    const d = draftList(entry).find(x => x.id === id) || draftList(entry)[0] || {};
+    const dq = draftOf(entry, d.id);
+    const q = dq && dq.quotes.length ? { text: dq.quotes.map(x => t(x.text)).join('\n/ ') } : null;
     const system = [
       '당신은 짧은 독서 영상(쇼츠·릴스) 원고를 봐주는 코치입니다.',
       '글쓴이는 AI가 대신 써주는 글을 원하지 않습니다. 생각은 글쓴이가 합니다.',
@@ -342,12 +372,48 @@
       '보는 기준: 첫 한 줄은 2초 안에 멈추게 하는가(짧고 구체적인가), 내 이야기에 구체적인 장면이 있는가, 실천은 보는 사람도 오늘 할 수 있을 만큼 작은가, 질문은 댓글로 답하기 쉬운가, 전체가 한 가지 메시지로 모이는가.',
       '인사말 없이 바로 시작합니다.'
     ].join('\n');
-    const user = '[책] ' + t(book.title) + '\n\n[첫 한 줄]\n' + (t(d.hook) || '(비어 있음)') +
+    const user = '[책] ' + t(book.title) + '\n\n[주제·제목]\n' + (t(d.theme) || '(비어 있음)') + '\n\n[첫 한 줄]\n' + (t(d.hook) || '(비어 있음)') +
       '\n\n[오늘의 문장]\n' + (q ? t(q.text) : '(고르지 않음)') +
       '\n\n[내 이야기]\n' + (t(d.story) || '(비어 있음)') +
       '\n\n[하나의 실천]\n' + (t(d.action) || '(비어 있음)') +
       '\n\n[마지막 질문]\n' + (t(d.ask) || '(비어 있음)');
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
+  }
+
+  // 주제로 묶기: AI는 묶음과 제목 후보만 제안한다. 본문은 쓰지 않는다.
+  function themeMessages(book, entry) {
+    const qs = quotes(entry);
+    const system = [
+      '당신은 독서 콘텐츠 편집자입니다. 한 사람이 오늘 책에서 고른 문장들과, 그 문장을 고른 이유를 받습니다.',
+      '할 일: 이 문장들을 사람들이 실제로 고민하고 검색할 만한 주제 2~3개로 묶고, 묶음마다 제목 후보 2개를 제안합니다.',
+      '',
+      '반드시 지킬 것:',
+      '- 본문, 첫 문장, 예시 글은 쓰지 않습니다. 글은 글쓴이가 직접 씁니다.',
+      '- 한 묶음에는 문장 1~3개. 모든 문장을 다 쓸 필요는 없습니다.',
+      '- 제목은 책 이름이 아니라 독자의 고민이나 질문으로 씁니다(예: "~할 때 덜 상처받는 법", "왜 ~할까?"). 25자 이내.',
+      '- 글쓴이가 고른 이유에 이미 들어 있는 질문과 생각을 최대한 살립니다. 기록에 없는 내용을 지어내지 않습니다.',
+      '',
+      '형식(이 형식만, 인사말 없이):',
+      '###THEME###',
+      '제목1: (제목 후보)',
+      '제목2: (제목 후보)',
+      '문장: (문장 번호, 쉼표로. 예: 1, 3)',
+      '이유: (왜 이렇게 묶었는지 한 문장)'
+    ].join('\n');
+    const lines = ['[책] ' + t(book.title) + (has(book.topic) ? ' · 주제: ' + t(book.topic) : '')];
+    if (has(book.whyReading)) lines.push('[이 책을 읽게 된 이유] ' + t(book.whyReading));
+    qs.forEach((q, i) => lines.push('', '[문장 ' + (i + 1) + '] ' + t(q.text), '[고른 이유] ' + (t(q.reason) || '(없음)')));
+    return [{ role: 'system', content: system }, { role: 'user', content: lines.join('\n') }];
+  }
+  function parseThemes(text, entry) {
+    const qs = quotes(entry);
+    return String(text || '').split('###THEME###').map(b => {
+      const get = k => { const m = b.match(new RegExp(k + '\\s*[:：]\\s*(.+)')); return m ? m[1].replace(/^["“]|["”]$/g, '').trim() : ''; };
+      const nums = (get('문장').match(/\d+/g) || []).map(Number).filter(n => n >= 1 && n <= qs.length);
+      const titles = [get('제목1'), get('제목2')].filter(Boolean);
+      if (!titles.length && !nums.length) return null;
+      return { titles, quoteIds: Array.from(new Set(nums)).map(n => qs[n - 1].id).filter(Boolean), nums: Array.from(new Set(nums)), why: get('이유') };
+    }).filter(Boolean);
   }
 
   function restyleMessages(book, entry, o) {
@@ -418,7 +484,7 @@
   return {
     blog: blog, threads: threads, longScript: longScript, dayLongScript: dayLongScript, hasContent: hasContent, shortScript: shortScript,
     scriptText: scriptText, dayNumber: dayNumber, sessionNumber: sessionNumber, THREADS_LIMIT: THREADS_LIMIT,
-    markdown: markdown, draftOf: draftOf, draftSeconds: draftSeconds, coachMessages: coachMessages,
+    markdown: markdown, draftOf: draftOf, draftList: draftList, themeMessages: themeMessages, parseThemes: parseThemes, draftSeconds: draftSeconds, coachMessages: coachMessages,
     restyleMessages: restyleMessages, parsePosts: parsePosts, RS_PLATFORMS: RS_PLATFORMS, RS_FORMATS: RS_FORMATS, RS_TONES: RS_TONES
   };
 });

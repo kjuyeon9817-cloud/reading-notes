@@ -115,3 +115,9 @@ LM Studio 로컬 AI로 Threads·X 글을 만드는 별도 페이지예요. `stan
 책 화면 "📝 옵시디언으로 보내기"(그 날 기록) 또는 설정의 "전체 기록 보내기".
 처음 한 번 wikiagent 폴더(옵시디언 볼트)를 고르면 `00_Raw/YYYY-MM-DD/<책> - N번째 날.md`로 저장돼요(컴퓨터 크롬·엣지).
 폴더 저장이 안 되는 기기는 .md 파일로 내려받아요. 머리말(frontmatter)과 [[책]]·[[저자]]·[[주제]] 링크만 붙이고 내 문장은 그대로 둬요.
+
+## 주제로 묶기 · 하루 여러 원고 (`entry.drafts`, `entry.themes`)
+
+- 원고는 `entry.drafts = [{ id, theme, starIds, hook, story, action, ask, coachNote }]`. 예전 `entry.draft`는 고칠 때 자동으로 옮겨져요.
+- 🧩 주제로 묶기: AI가 문장 묶음 2~3개와 제목 후보만 제안(`F.themeMessages`, `F.parseThemes`), 본문은 쓰지 않아요.
+- 포스팅용 글에서 원고를 고르면 블로그(원고 중심)·Threads·쇼츠·더빙 영상이 그 원고 하나로 만들어져요. 타깃 맞춤 재구성에 네이버 블로그 추가.

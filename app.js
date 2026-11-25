@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126g';
+  const APP_VERSION = '20261126h';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -691,84 +691,155 @@
   }
 
   // ---------- 오늘의 원고 ----------
-  // 기록은 나를 위한 메모, 원고는 보는 사람을 위해 내가 다시 쓰는 3~5줄. AI는 쓰지 않고 짚어만 준다.
+  // 기록은 나를 위한 메모, 원고는 보는 사람을 위해 내가 다시 쓰는 글. 하루에 주제별로 여러 개 쓸 수 있다.
+  // AI는 주제 묶음·제목 후보를 제안하고 짚어줄 뿐, 본문은 쓰지 않는다.
   const DRAFT_FIELDS = [
-    ['hook', '첫 한 줄', '처음 2초에 멈추게 할 한 줄. 이 영상을 꼭 봐야 할 사람은 누구인가요?', '예: 요즘 글이 눈에 안 들어오는 사람이라면', 60],
-    ['story', '내 이야기', '왜 이 문장에서 멈췄나요? 떠오른 장면 하나를 구체적으로 적어요.', '예: 어제 ○○하다가 ○○했을 때, 이 문장이 생각났어요.', 90],
-    ['action', '하나의 실천', '보는 사람도 오늘 해볼 수 있을 만큼 작은 것 하나.', '예: 오늘 읽은 문장 하나만 손으로 적어보기', 60],
-    ['ask', '마지막 질문', '댓글로 답하고 싶어지는 질문으로 끝내요.', '예: 여러분은 요즘 어떤 문장에서 멈췄나요?', 60]
+    ['hook', '첫 한 줄', '처음 2초에 멈추게 할 한 줄. 이 글을 꼭 봐야 할 사람은 누구인가요?', '예: 요즘 사람 때문에 지치는 사람이라면', 60],
+    ['story', '내 이야기', '왜 이 문장에서 멈췄나요? 떠오른 장면 하나를 구체적으로 적어요.', '예: 어제 ○○하다가 ○○했을 때, 이 문장이 생각났어요.', 300],
+    ['action', '하나의 실천', '보는 사람도 오늘 해볼 수 있을 만큼 작은 것 하나.', '예: 오늘 누가 이상하게 굴면 "지식이 하나 늘었다"고 적어보기', 80],
+    ['ask', '마지막 질문', '댓글로 답하고 싶어지는 질문으로 끝내요.', '예: 여러분은 요즘 어떤 사람 때문에 지쳤나요?', 60]
   ];
+  function starIdsOf(d) { return Array.isArray(d.starIds) ? d.starIds : (d.starId ? [d.starId] : []); }
   function draftHtml(entry) {
-    const d = entry.draft || {};
+    const list = F.draftList(entry);
+    const cur = list.find(d => d.id === view.did) || list[0] || {};
+    const stars = starIdsOf(cur);
     const qs = (entry.quotes || []).map((q, i) => ({ q, i })).filter(x => x.q.text && x.q.text.trim());
-    const star = qs.find(x => x.q.id && x.q.id === d.starId);
+    const chosen = qs.filter(x => x.q.id && stars.includes(x.q.id));
     const ref = (label, text) => text && text.trim() ? '<div class="draft-ref"><span>' + label + '</span>' + esc(text.trim()) + '</div>' : '';
     const apps = (entry.applications || []).filter(a => a.text && a.text.trim()).map(a => a.text.trim()).join(' / ');
-    const sec = F.draftSeconds(entry);
-    const c = view.coach || {};
-    return '<div class="card draft-card" id="draft"><h2><span class="section-num">5</span>오늘의 원고 <span class="small muted" style="font-weight:500">영상·글에 쓸 내용</span></h2>' +
-      '<p class="small muted">위 기록은 나를 위한 메모예요. 여기에는 보는 사람을 위해 3~5줄로 다시 써요. 비워 두면 기록을 그대로 써요.</p>' +
-      '<label>⭐ 오늘의 문장 하나</label>' +
+    const sec = cur.id ? F.draftSeconds(entry, cur.id) : 0;
+    const c = view.coach || {}, th = view.theme || {};
+    const themes = (entry.themes && entry.themes.items) || [];
+    const ready = llmReady();
+    let h = '<div class="card draft-card" id="draft"><h2><span class="section-num">5</span>오늘의 원고 <span class="small muted" style="font-weight:500">영상·글에 쓸 내용</span></h2>' +
+      '<p class="small muted">위 기록은 나를 위한 메모예요. 여기서는 보는 사람을 위해 주제 하나씩 따로 써요. 하루 기록으로 원고를 여러 개 만들 수 있어요.</p>';
+    // 주제로 묶기
+    h += '<div class="theme-box"><div class="quote-head"><strong>🧩 주제로 묶기</strong>' +
+      (ready && qs.length ? '<button class="btn ghost small" type="button" id="theme-run"' + (th.busy ? ' disabled' : '') + '>' + (th.busy ? '묶는 중…' : (themes.length ? '다시 묶기' : '묶음 제안받기')) + '</button>' : '') + '</div>' +
+      (!qs.length ? '<p class="small muted">발췌한 문장을 먼저 적어요.</p>' :
+        !ready ? '<p class="small muted">AI가 문장을 주제별로 묶고 제목 후보를 제안해요. <a href="#" data-go="settings">설정</a>에서 LM Studio를 연결하면 쓸 수 있어요.</p>' :
+          '<p class="small muted">AI는 묶음과 제목 후보만 제안해요. 글은 내가 써요.</p>') +
+      (th.busy ? '<pre class="out coach-out" id="theme-live">' + esc(th.text || '') + '</pre>' + '<button class="btn danger small" type="button" id="theme-stop">멈추기</button>' : '') +
+      (th.error ? '<p class="notice">' + esc(th.error) + '</p>' : '') +
+      themes.map((tm, k) => '<div class="theme-item"><div class="small muted">묶음 ' + (k + 1) + ' · 문장 ' + tm.nums.join(', ') + (tm.why ? ' · ' + esc(tm.why) : '') + '</div>' +
+        '<div class="theme-quotes">' + tm.nums.map(n => { const q = (entry.quotes || []).filter(x => x.text && x.text.trim())[n - 1]; return q ? '<div>' + n + '. ' + esc(q.text.trim().split('\n')[0].slice(0, 50)) + '</div>' : ''; }).join('') + '</div>' +
+        '<div class="actions">' + tm.titles.map((tt, ti) => '<button type="button" class="chip" data-theme-start="' + k + '|' + ti + '">✍️ ' + esc(tt) + '</button>').join('') + '</div></div>').join('') +
+      '</div>';
+    // 원고 탭
+    h += '<div class="date-chips draft-tabs">' + list.map((d, k) =>
+      '<button type="button" class="chip' + (d.id === cur.id ? ' on' : '') + '" data-did="' + esc(d.id) + '">원고 ' + (k + 1) + (d.theme ? ' · ' + esc(d.theme.length > 14 ? d.theme.slice(0, 14) + '…' : d.theme) : '') + '</button>').join('') +
+      '<button type="button" class="chip" id="draft-new">＋ 새 원고</button></div>';
+    if (!cur.id) return h + '<p class="small muted">"＋ 새 원고"를 누르거나, 위에서 제목 후보를 눌러 시작해요.</p></div>';
+    h += '<div class="draft-field"><label for="d-theme">제목 (주제)</label><p class="small muted draft-help">책 이름보다, 독자의 고민이나 질문으로.</p>' +
+      '<input id="d-theme" type="text" data-draft="theme" value="' + esc(cur.theme || '') + '" placeholder="예: 남이 나를 이상하게 대할 때, 덜 상처받는 법"></div>' +
+      '<label>⭐ 이 원고에 쓸 문장 (1~2개)</label>' +
       (qs.length ? '<div class="date-chips">' + qs.map(x => {
-        const first = x.q.text.trim().split('\n')[0];
-        return '<button type="button" class="chip' + (star && star.i === x.i ? ' on' : '') + '" data-star="' + x.i + '">' + (star && star.i === x.i ? '⭐ ' : '') + (x.i + 1) + '. ' + esc(first.length > 18 ? first.slice(0, 18) + '…' : first) + '</button>';
-      }).join('') + '</div>' : '<p class="small muted">위에서 발췌한 문장을 먼저 적어요.</p>') +
+        const on = stars.includes(x.q.id), first = x.q.text.trim().split('\n')[0];
+        return '<button type="button" class="chip' + (on ? ' on' : '') + '" data-star="' + x.i + '">' + (on ? '⭐ ' : '') + (x.i + 1) + '. ' + esc(first.length > 18 ? first.slice(0, 18) + '…' : first) + '</button>';
+      }).join('') + '</div>' + (chosen.length > 2 ? '<p class="small over">문장이 많으면 메시지가 흐려지고 인용이 길어져요. 1~2개를 추천해요.</p>' : '') : '<p class="small muted">위에서 발췌한 문장을 먼저 적어요.</p>') +
       DRAFT_FIELDS.map(([k, label, help, ph, max]) => {
-        const v = d[k] || '';
+        const v = cur[k] || '';
         return '<div class="draft-field"><label for="d-' + k + '">' + label + '</label><p class="small muted draft-help">' + help + '</p>' +
-          (k === 'story' && star ? ref('내가 적은 고른 이유', star.q.reason) : '') +
+          (k === 'story' ? chosen.map(x => ref('문장 ' + (x.i + 1) + '을 고른 이유', x.q.reason)).join('') : '') +
           (k === 'action' ? ref('내 적용 방법', apps) : '') +
-          '<textarea id="d-' + k + '" data-draft="' + k + '" data-max="' + max + '" style="min-height:' + (k === 'story' ? 90 : 52) + 'px" placeholder="' + esc(ph) + '">' + esc(v) + '</textarea>' +
+          '<textarea id="d-' + k + '" data-draft="' + k + '" data-max="' + max + '" style="min-height:' + (k === 'story' ? 110 : 52) + 'px" placeholder="' + esc(ph) + '">' + esc(v) + '</textarea>' +
           '<div class="small draft-count" id="dc-' + k + '">' + draftCount(v, max) + '</div></div>';
       }).join('') +
-      '<p class="small" id="draft-sec"><strong>' + (sec ? '쇼츠 예상 약 ' + sec + '초' : '아직 원고가 없어요') + '</strong> <span class="muted">· 목표 30~50초</span></p>' +
+      '<p class="small" id="draft-sec">' + secLine(sec) + '</p>' +
       '<div class="coach">' +
-      (llmReady() ? '<div class="actions"><button class="btn ghost small" type="button" id="coach-run"' + (c.busy ? ' disabled' : '') + '>' + (c.busy ? '보는 중…' : '🧭 코치에게 짚어보기') + '</button>' +
-        (c.busy ? '<button class="btn danger small" type="button" id="coach-stop">멈추기</button>' : '') + '</div>' +
+      (ready ? '<div class="actions"><button class="btn ghost small" type="button" id="coach-run"' + (c.busy ? ' disabled' : '') + '>' + (c.busy ? '보는 중…' : '🧭 코치에게 짚어보기') + '</button>' +
+        (c.busy ? '<button class="btn danger small" type="button" id="coach-stop">멈추기</button>' : '') +
+        '<button class="btn danger small" type="button" id="draft-del">이 원고 지우기</button></div>' +
         '<p class="small muted">코치는 문장을 대신 쓰지 않고, 아쉬운 점과 스스로 답해볼 질문만 알려줘요.</p>' :
+        '<div class="actions"><button class="btn danger small" type="button" id="draft-del">이 원고 지우기</button></div>' +
         '<p class="small muted">🧭 코치(고쳐 쓰지 않고 짚어만 주는 AI)를 쓰려면 <a href="#" data-go="settings">설정</a>에서 LM Studio를 연결해요.</p>') +
       (c.error ? '<p class="notice">' + esc(c.error) + '</p>' : '') +
-      ((c.busy && c.text) || d.coachNote ? '<pre class="out coach-out" id="coach-out">' + esc(c.busy ? c.text : d.coachNote) + '</pre>' : '') +
+      ((c.busy && c.text) || cur.coachNote ? '<pre class="out coach-out" id="coach-out">' + esc(c.busy ? c.text : cur.coachNote) + '</pre>' : '') +
       '</div></div>';
+    return h;
   }
+  function secLine(sec) { return '<strong>' + (sec ? '쇼츠 예상 약 ' + sec + '초' : '아직 원고 내용이 없어요') + '</strong> <span class="muted">· 목표 30~50초</span>'; }
   function draftCount(v, max) {
     const n = Array.from(String(v || '').trim()).length;
     return '<span class="' + (n > max ? 'over' : 'muted') + '">' + n + '자' + (n > max ? ' · 조금 길어요 (권장 ' + max + '자 이내)' : '') + '</span>';
   }
   function bindDraft(book, entry, live, commit) {
-    const dr = () => { const e = live(); e.draft = e.draft || {}; return e.draft; };
+    const toDraft = () => document.getElementById('draft');
+    const keep = () => { const card = toDraft(); if (card) card.scrollIntoView({ block: 'start' }); };
+    // entry.drafts로 옮기고(예전 entry.draft 포함) 지금 원고를 돌려준다. 없으면 만든다.
+    const listOf = () => {
+      const e = live();
+      if (!Array.isArray(e.drafts)) { e.drafts = e.draft ? [Object.assign({ id: 'd0' }, e.draft)] : []; delete e.draft; }
+      return e.drafts;
+    };
+    const cur = () => {
+      const l = listOf();
+      let d = l.find(x => x.id === view.did) || l[0];
+      if (!d) { d = { id: uid(), starIds: [] }; l.push(d); view.did = d.id; }
+      if (!Array.isArray(d.starIds)) { d.starIds = d.starId ? [d.starId] : []; delete d.starId; }
+      return d;
+    };
+    app.querySelectorAll('[data-did]').forEach(el => el.addEventListener('click', () => { view.did = el.dataset.did; view.coach = {}; render(); keep(); }));
+    const nw = document.getElementById('draft-new');
+    if (nw) nw.addEventListener('click', () => { const d = { id: uid(), starIds: [] }; listOf().push(d); view.did = d.id; view.coach = {}; commit(); render(); keep(); });
+    const del = document.getElementById('draft-del');
+    if (del) del.addEventListener('click', () => {
+      if (!confirm('이 원고를 지울까요? 기록은 그대로 남아요.')) return;
+      const l = listOf(), d = cur(); l.splice(l.indexOf(d), 1); view.did = l[0] ? l[0].id : null; commit(); render(); keep();
+    });
     app.querySelectorAll('[data-star]').forEach(el => el.addEventListener('click', () => {
       const q = live().quotes[Number(el.dataset.star)];
       if (!q.id) q.id = uid();
-      const d = dr(); d.starId = d.starId === q.id ? '' : q.id;
-      commit(); render();
-      const card = document.getElementById('draft'); if (card) card.scrollIntoView({ block: 'start' });
+      const d = cur(), k = d.starIds.indexOf(q.id);
+      if (k >= 0) d.starIds.splice(k, 1); else d.starIds.push(q.id);
+      commit(); render(); keep();
     }));
     app.querySelectorAll('[data-draft]').forEach(el => el.addEventListener('input', () => {
-      dr()[el.dataset.draft] = el.value; commit();
-      document.getElementById('dc-' + el.dataset.draft).innerHTML = draftCount(el.value, Number(el.dataset.max));
-      const sec = F.draftSeconds(live());
-      document.getElementById('draft-sec').innerHTML = '<strong>' + (sec ? '쇼츠 예상 약 ' + sec + '초' : '아직 원고가 없어요') + '</strong> <span class="muted">· 목표 30~50초</span>';
+      const d = cur(); d[el.dataset.draft] = el.value; commit();
+      const cnt = document.getElementById('dc-' + el.dataset.draft);
+      if (cnt) cnt.innerHTML = draftCount(el.value, Number(el.dataset.max));
+      document.getElementById('draft-sec').innerHTML = secLine(F.draftSeconds(live(), d.id));
     }));
-    const run = document.getElementById('coach-run');
-    if (run) run.addEventListener('click', async () => {
+    // 주제 묶음에서 원고 시작
+    app.querySelectorAll('[data-theme-start]').forEach(el => el.addEventListener('click', () => {
+      const [k, ti] = el.dataset.themeStart.split('|').map(Number);
+      const tm = live().themes.items[k];
+      const d = { id: uid(), theme: tm.titles[ti], starIds: tm.quoteIds.slice() };
+      listOf().push(d); view.did = d.id; commit(); render(); keep();
+      const f = document.getElementById('d-hook'); if (f) f.focus({ preventScroll: true });
+    }));
+    const runAi = async (key, messages, onDone, temperature) => {
       const ctrl = new AbortController();
-      view.coach = { busy: true, text: '', ctrl };
-      render(); document.getElementById('draft').scrollIntoView({ block: 'start' });
+      view[key] = { busy: true, text: '', ctrl };
+      render(); keep();
       try {
         const mod = await import('./proofread.js?v=' + APP_VERSION);
         const cfg = Object.assign({}, llm(), { claudeKey: settings.claudeKey });
-        const text = await mod.generateText(cfg, F.coachMessages(book, live()), {
-          temperature: 0.4, signal: ctrl.signal,
-          onText: tx => { view.coach.text = tx; const o = document.getElementById('coach-out'); if (o) o.textContent = tx; else if (view.name === 'book') render(); }
+        const outId = key === 'coach' ? 'coach-out' : 'theme-live';
+        const text = await mod.generateText(cfg, messages, {
+          temperature, signal: ctrl.signal,
+          onText: tx => { view[key].text = tx; const o = document.getElementById(outId); if (o) o.textContent = tx; else if (view.name === 'book') render(); }
         });
-        dr().coachNote = (text || '').trim(); commit();
-        view.coach = {};
+        onDone((text || '').trim());
+        view[key] = {};
       } catch (e) {
-        view.coach = { error: e.name === 'AbortError' ? '코치를 멈췄어요.' : (e.message || String(e)) };
+        view[key] = { error: e.name === 'AbortError' ? '멈췄어요.' : (e.message || String(e)) };
       }
-      if (view.name === 'book') { render(); const card = document.getElementById('draft'); if (card) card.scrollIntoView({ block: 'start' }); }
-    });
+      if (view.name === 'book') { render(); keep(); }
+    };
+    const tr = document.getElementById('theme-run');
+    if (tr) tr.addEventListener('click', () => runAi('theme', F.themeMessages(book, live()), text => {
+      const e = live();
+      (e.quotes || []).forEach(q => { if (!q.id) q.id = uid(); });
+      const items = F.parseThemes(text, e);
+      if (!items.length) throw new Error('묶음을 읽지 못했어요. 다시 눌러 주세요.');
+      e.themes = { items, at: new Date().toISOString() }; commit();
+    }, 0.5));
+    const ts = document.getElementById('theme-stop');
+    if (ts) ts.addEventListener('click', () => { if (view.theme && view.theme.ctrl) view.theme.ctrl.abort(); });
+    const run = document.getElementById('coach-run');
+    if (run) run.addEventListener('click', () => { const d = cur(); runAi('coach', F.coachMessages(book, live(), d.id), text => { d.coachNote = text; commit(); }, 0.4); });
     const stop = document.getElementById('coach-stop');
     if (stop) stop.addEventListener('click', () => { if (view.coach && view.coach.ctrl) view.coach.ctrl.abort(); });
   }
@@ -1088,7 +1159,7 @@
       '<label for="rs-target">목표 독자</label>' +
       '<textarea id="rs-target" style="min-height:60px" placeholder="예: 하루하루 버티느라 자기 자신을 돌볼 틈이 없는 20~30대">' + esc(o.target) + '</textarea>' +
       '<label>어투</label>' + seg('tone', Object.fromEntries(Object.entries(F.RS_TONES).map(([k, v]) => [k, v.label]))) +
-      '<label>플랫폼</label>' + seg('platform', { threads: 'Threads (500자)', x: 'X (280자)' }) +
+      '<label>플랫폼</label>' + seg('platform', { threads: 'Threads (500자)', x: 'X (280자)', blog: '네이버 블로그' }) +
       '<label>분량</label>' + seg('format', Object.fromEntries(Object.entries(F.RS_FORMATS).map(([k, v]) => [k, v.label + ' ' + v.count]))) +
       '<p class="small muted">사용 중: ' + (l.provider === 'lmstudio' ? 'LM Studio · ' + esc(l.lmModel || '모델 미선택') : l.provider === 'ollama' ? 'Ollama · ' + esc(l.ollamaModel || '모델 미선택') : 'Claude') +
       ' (<a href="#" data-go="settings">바꾸기</a>)</p>' +
@@ -1103,7 +1174,7 @@
     } else if (saved && saved.posts && saved.posts.length) {
       const lim = (F.RS_PLATFORMS[saved.platform] || F.RS_PLATFORMS.threads).limit;
       h += '<div class="quote-head" style="margin-top:14px"><span class="small muted">' + saved.posts.length + '개 · ' +
-        esc((F.RS_TONES[saved.tone] || {}).label || '') + ' · ' + esc(saved.platform === 'x' ? 'X' : 'Threads') + '</span>' +
+        esc((F.RS_TONES[saved.tone] || {}).label || '') + ' · ' + esc((F.RS_PLATFORMS[saved.platform] || F.RS_PLATFORMS.threads).name) + '</span>' +
         '<button class="btn small" type="button" data-rscopy="all">전체 복사</button></div>' +
         saved.posts.map((p, i) => {
           const n = Array.from(p).length;
@@ -1172,7 +1243,10 @@
     if (!book || book.trashedAt) { go({ name: 'list' }); return; }
     const entry = getEntry(book, view.date);
     const tab = view.tab || 'blog';
-    const opts = { intro: state.intro, outro: state.outro };
+    const filled = entry ? F.draftList(entry).filter(d => F.draftOf(entry, d.id) && F.draftOf(entry, d.id).id === d.id) : [];
+    if (filled.length && view.did !== 'none' && !filled.some(d => d.id === view.did)) view.did = filled[0].id;
+    if (!filled.length) view.did = 'none';
+    const opts = { intro: state.intro, outro: state.outro, draftId: view.did };
     const tabs = [['restyle', '✨ 타깃 맞춤 재구성'], ['blog', '네이버 블로그'], ['threads', 'Threads'], ['long', '롱폼 대본'], ['short', '쇼츠·릴스 대본']];
     let body = '';
     if (!entry || !F.hasContent(entry)) {
@@ -1182,7 +1256,7 @@
       body = '<label>제목</label>' + textBlock('o-title', b.title) + '<div class="actions">' + copyBtn('o-title', '제목 복사') + '</div>' +
         '<label>본문</label>' + textBlock('o-body', b.body) + '<div class="actions">' + copyBtn('o-body', '본문 복사') + '</div>';
     } else if (tab === 'threads') {
-      const posts = F.threads(book, entry);
+      const posts = F.threads(book, entry, opts);
       body = '<p class="small muted">' + posts.length + '개 글을 순서대로 이어서 올려요. 첫 글을 올리고, 나머지는 그 글의 답글로 달면 돼요.</p>' +
         posts.map((p, i) => '<div class="scene"><div class="quote-head"><span class="small muted">' + (i + 1) + '번째 · ' + p.length + '/' + F.THREADS_LIMIT + '자</span>' + copyBtn('o-t' + i) + '</div>' + textBlock('o-t' + i, p) + '</div>').join('');
     } else if (tab === 'restyle') {
@@ -1195,22 +1269,26 @@
       const qi = Math.min(view.qi || 0, Math.max(qs.length - 1, 0));
       body = (qs.length > 1 ? '<label>쓸 문장 고르기</label><div class="date-chips">' + qs.map((q, i) =>
         '<button type="button" class="chip' + (i === qi ? ' on' : '') + '" data-qpick="' + i + '">문장 ' + (i + 1) + '</button>').join('') + '</div>' : '') +
-        videoBtn() + scriptHtml(F.shortScript(book, entry, { quoteIndex: qi }), 'o-short');
+        videoBtn() + scriptHtml(F.shortScript(book, entry, { quoteIndex: qi, draftId: view.did }), 'o-short');
     }
     app.innerHTML =
       '<button class="back" type="button" id="back">← ' + esc(book.title) + '</button>' +
       '<h1>포스팅용 글</h1>' +
       '<p class="muted small">' + F.sessionNumber(book, view.date) + '번째 날 · ' + fmtDate(view.date) + ' 기록만 썼어요 · 내가 쓴 문장은 그대로 두고 순서와 형식만 바꿨어요.</p>' +
-      (entry && F.draftOf(entry) ? '<p class="notice">⭐ 오늘의 원고로 만들었어요. 블로그·Threads·대본·더빙 영상 모두 원고 내용을 써요. 원고는 책 화면 5번 칸에서 고쳐요.</p>' : '') +
+      (filled.length ? '<div class="card draft-pick"><label style="margin-top:0">어떤 내용으로 만들까요?</label><div class="date-chips">' +
+        filled.map((d, k) => '<button type="button" class="chip' + (view.did === d.id ? ' on' : '') + '" data-pickdraft="' + esc(d.id) + '">✍️ 원고 ' + (k + 1) + (d.theme ? ' · ' + esc(d.theme) : '') + '</button>').join('') +
+        '<button type="button" class="chip' + (view.did === 'none' ? ' on' : '') + '" data-pickdraft="none">📒 기록 전체</button></div>' +
+        '<p class="small muted" style="margin:6px 0 0">원고를 고르면 블로그·Threads·쇼츠 대본·더빙 영상이 그 원고 하나로 만들어져요. 원고는 책 화면 5번 칸에서 고쳐요.</p></div>' : '') +
       (entry && F.hasContent(entry) ? proofCardHtml() : '') +
       '<div class="date-chips">' + tabs.map(([k, l]) => '<button type="button" class="chip' + (k === tab ? ' on' : '') + '" data-tab="' + k + '">' + l + '</button>').join('') + '</div>' +
       '<div class="card">' + body + '</div>';
     document.getElementById('back').addEventListener('click', () => go({ name: 'book', bookId: book.id, date: view.date }));
     app.querySelectorAll('[data-tab]').forEach(el => el.addEventListener('click', () => { view.tab = el.dataset.tab; render(); }));
+    app.querySelectorAll('[data-pickdraft]').forEach(el => el.addEventListener('click', () => { view.did = el.dataset.pickdraft; render(); }));
     app.querySelectorAll('[data-qpick]').forEach(el => el.addEventListener('click', () => { view.qi = Number(el.dataset.qpick); render(); }));
     if (entry && F.hasContent(entry)) bindProof(book, entry);
     const vb = document.getElementById('mk-video');
-    if (vb) vb.addEventListener('click', () => go({ name: 'video', kind: tab === 'long' ? 'long' : 'short', bookId: book.id, date: view.date, qi: view.qi || 0, from: view }));
+    if (vb) vb.addEventListener('click', () => go({ name: 'video', kind: tab === 'long' ? 'long' : 'short', bookId: book.id, date: view.date, qi: view.qi || 0, did: view.did, from: view }));
     if (tab === 'restyle' && entry && F.hasContent(entry)) bindRestyle(book, entry);
     bindCopy();
   }
@@ -1272,7 +1350,7 @@
       if (!entry || !F.hasContent(entry)) { back(); return; }
       items = [{ book, entry }];
       vertical = view.kind === 'short';
-      const sc = vertical ? F.shortScript(book, entry, { quoteIndex: view.qi || 0 }) : F.longScript(book, entry, opts);
+      const sc = vertical ? F.shortScript(book, entry, { quoteIndex: view.qi || 0, draftId: view.did }) : F.longScript(book, entry, Object.assign({ draftId: view.did }, opts));
       sc.scenes.forEach(s => { s.book = book; scenes.push(s); });
       title = book.title + ' · ' + F.sessionNumber(book, view.date) + '번째 날';
     }
@@ -1285,7 +1363,7 @@
         book: (b.title || '') + (b.id && view.date ? ' · ' + F.sessionNumber(b, view.date) + '번째 날' : '') };
     });
     const motions = items.map(it => ({ bookId: it.book.id, title: it.book.title, motion: mod.pickMotion(it.book) }));
-    const storeKey = [view.kind, view.kind === 'day' ? 'all' : view.bookId, view.date, view.kind === 'short' ? (view.qi || 0) : ''].join('|');
+    const storeKey = [view.kind, view.kind === 'day' ? 'all' : view.bookId, view.date, view.kind === 'short' ? (view.qi || 0) : '', view.did || ''].join('|');
     const safe = String(title).replace(/[\\/:*?"<>|·]+/g, ' ').replace(/\s+/g, '-');
     if (videoHandle) videoHandle.stop();
     videoHandle = await mod.mount(app, {
