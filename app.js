@@ -5,24 +5,58 @@
 (function () {
   'use strict';
 
-  const LS_BOOKS = 'rn.books.v1';
-  const LS_SETTINGS = 'rn.settings.v1';
-  const LS_SYNC = 'rn.sync.v1'; // { shas: {id: sha}, dirty: {id: true}, deleted: {id: sha} }
+  const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
 
   // ---------- 저장소(로컬) ----------
+  let readFailed = false;
   function load(key, fallback) {
     try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
-    catch (e) { return fallback; }
+    catch (e) { readFailed = true; return fallback; }
   }
-  function store(key, value) {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* 저장 공간 부족 등 */ }
+  function profile(books = {}) {
+    return { books, sync: { shas: {}, dirty: {}, deleted: {}, bases: {}, conflicts: {} } };
   }
 
-  let books = load(LS_BOOKS, {});
-  let settings = load(LS_SETTINGS, { owner: '', repo: 'reading-notes-data', token: '' });
-  let sync = load(LS_SYNC, { shas: {}, dirty: {}, deleted: {} });
-  sync.shas = sync.shas || {}; sync.dirty = sync.dirty || {}; sync.deleted = sync.deleted || {};
+  function migrate() {
+    const old = load('rn.settings.v1', {});
+    const key = old.owner && old.repo ? targetKey(old.owner, old.repo) : '';
+    const initial = profile(load('rn.books.v1', {}));
+    Object.assign(initial.sync, load('rn.sync.v1', {}));
+    return { active: key, profiles: { [key]: initial }, intro: old.intro, outro: old.outro };
+  }
+
+  function targetKey(owner, repo) { return (owner + '/' + repo).toLowerCase(); }
+  function connection(key, token = '') {
+    const [owner = '', repo = 'reading-notes-data'] = key.split('/');
+    return { owner, repo, token };
+  }
+
+  let state = load(LS_STATE, null) || migrate();
+  let { books, sync } = state.profiles[state.active];
+  const legacySettings = load('rn.settings.v1', {});
+  let settings = connection(state.active,
+    state.active === targetKey(legacySettings.owner, legacySettings.repo) ? legacySettings.token : '');
+  let storageFailed = false;
+
+  function persist() {
+    if (readFailed) {
+      storageFailed = true;
+      setStatus('기기에서 기존 기록을 읽지 못했어요. 입력한 글은 화면을 닫기 전에 백업하세요.', true);
+      return false;
+    }
+    try {
+      localStorage.setItem(LS_STATE, JSON.stringify(state));
+    } catch (e) {
+      storageFailed = true;
+      setStatus('기기에 저장하지 못했어요. 화면을 닫기 전에 백업을 내려받으세요.', true);
+      return false;
+    }
+    storageFailed = false;
+    // Keep legacy records for recovery, but remove the old stored credential.
+    try { localStorage.removeItem('rn.settings.v1'); } catch (e) { /* storage unavailable */ }
+    return true;
+  }
 
   let view = { name: 'list' };
 
@@ -84,9 +118,8 @@
   function saveBook(book, opts) {
     book.updatedAt = new Date().toISOString();
     books[book.id] = book;
-    store(LS_BOOKS, books);
     sync.dirty[book.id] = true;
-    store(LS_SYNC, sync);
+    if (!persist()) return;
     if (!opts || !opts.quiet) setStatus('이 기기에 저장됨');
     scheduleSync();
   }
@@ -108,141 +141,221 @@
     const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
     return new TextDecoder().decode(bytes);
   }
-  async function gh(path, opts) {
-    opts = opts || {};
-    const url = 'https://api.github.com/repos/' + encodeURIComponent(settings.owner) + '/' +
-      encodeURIComponent(settings.repo) + '/contents/' + path;
-    const res = await fetch(url, {
+  async function github(path, opts = {}, account = settings) {
+    const res = await fetch('https://api.github.com' + path, {
       method: opts.method || 'GET',
       headers: {
-        'Authorization': 'Bearer ' + settings.token,
-        'Accept': 'application/vnd.github+json',
+        Authorization: 'Bearer ' + account.token,
+        Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         ...(opts.body ? { 'Content-Type': 'application/json' } : {})
       },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
-      cache: 'no-store'
+      cache: 'no-store',
+      redirect: 'error'
     });
     if (res.status === 404 && opts.allow404) return null;
-    if (!res.ok) {
-      let msg = res.status + '';
-      try { const j = await res.json(); msg += ' ' + (j.message || ''); } catch (e) { /* ignore */ }
-      const err = new Error(msg); err.status = res.status; throw err;
+    if (!res.ok) throw new Error('GitHub 응답 ' + res.status);
+    return res.json();
+  }
+
+  function repoPath(account = settings) {
+    return '/repos/' + encodeURIComponent(account.owner) + '/' + encodeURIComponent(account.repo);
+  }
+
+  async function verifyPrivateRepo(account = settings) {
+    const repo = await github(repoPath(account), {}, account);
+    if (repo.private !== true || repo.visibility !== 'private') {
+      throw new Error('비공개 저장소에만 기록을 보낼 수 있어요.');
     }
-    return res.status === 204 ? null : res.json();
+    if (targetKey(account.owner, account.repo) !== String(repo.full_name).toLowerCase()) {
+      throw new Error('기록 저장소 주소를 다시 확인해 주세요.');
+    }
+    return repo.id;
+  }
+
+  function gh(path, opts) { return github(repoPath() + '/contents/' + path, opts); }
+  function copy(value) { return JSON.parse(JSON.stringify(value)); }
+  function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+  function validateBook(book, id) {
+    const day = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const item = value => value && typeof value.id === 'string';
+    if (!book || book.id !== id || !/^[a-z0-9]+$/.test(id) || Object.hasOwn(Object.prototype, id) || !day(book.startDate) ||
+        (book.finishedDate && !day(book.finishedDate)) || !Array.isArray(book.entries) ||
+        !book.entries.every(e => e && day(e.date) && Array.isArray(e.quotes) && e.quotes.every(item) &&
+          Array.isArray(e.applications) && e.applications.every(item))) {
+      throw new Error('독서 기록 파일의 형식이 올바르지 않아요.');
+    }
+  }
+
+  // Merge independent edits using the last version both sides shared.
+  function mergeValue(base, local, remote, conflicts, choice, path = []) {
+    if (same(local, remote)) return local;
+    if (same(local, base)) return remote;
+    if (same(remote, base)) return local;
+
+    const key = path.at(-1);
+    const itemKey = key === 'entries' ? 'date' : (key === 'quotes' || key === 'applications' ? 'id' : null);
+    if (itemKey && Array.isArray(local) && Array.isArray(remote) && (base === undefined || Array.isArray(base))) {
+      const index = items => new Map((items || []).map(item => [item[itemKey], item]));
+      const [before, here, there] = [base, local, remote].map(index);
+      const ids = new Set([...here.keys(), ...there.keys()]);
+      const items = [...ids].map(id => {
+        const localItem = here.get(id);
+        const remoteItem = there.get(id);
+        const baseline = before.get(id) ??
+          (key === 'entries' && localItem && remoteItem ? newEntry(id) : undefined);
+        return mergeValue(baseline, localItem, remoteItem, conflicts, choice, [...path, id]);
+      }).filter(Boolean);
+      if (key === 'applications' && items.length > 3) {
+        conflicts.push(path.join(' / '));
+        return choice === 'remote' ? remote : local;
+      }
+      return key === 'entries' ? items.sort((a, b) => a.date.localeCompare(b.date)) : items;
+    }
+    const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    if (record(local) && record(remote) && (base === undefined || record(base))) {
+      const keys = new Set([...Object.keys(local), ...Object.keys(remote)]);
+      return Object.fromEntries([...keys].map(key => {
+        if (path.length === 0 && key === 'updatedAt') {
+          return [key, [local.updatedAt, remote.updatedAt].sort().at(-1)];
+        }
+        const get = (object, name) => object && Object.hasOwn(object, name) ? object[name] : undefined;
+        return [key, mergeValue(get(base, key), get(local, key), get(remote, key), conflicts, choice, [...path, key])];
+      }).filter(([, value]) => value !== undefined));
+    }
+    conflicts.push(path.join(' / ') || '책 전체');
+    return choice === 'remote' ? remote : local;
   }
 
   async function fetchRemoteBook(id) {
-    const f = await gh(DATA_DIR + '/' + id + '.json', { allow404: true });
-    if (!f) return null;
-    return { sha: f.sha, book: JSON.parse(b64decode(f.content)) };
+    const file = await gh(DATA_DIR + '/' + encodeURIComponent(id) + '.json', { allow404: true });
+    if (!file) return null;
+    const book = JSON.parse(b64decode(file.content));
+    validateBook(book, id);
+    return { sha: file.sha, book };
+  }
+
+  function reconcile(id, remote) {
+    const local = books[id];
+    if (!local || !sync.dirty[id]) {
+      const changed = !same(local, remote.book);
+      if (changed) books[id] = remote.book;
+      sync.shas[id] = remote.sha;
+      sync.bases[id] = copy(remote.book);
+      delete sync.conflicts[id];
+      if (changed) refreshView(id);
+      return;
+    }
+
+    if (sync.shas[id] === remote.sha) {
+      // A legacy SHA without a baseline may already refer to a skipped remote edit.
+      if (sync.bases[id]) {
+        delete sync.conflicts[id];
+        return;
+      }
+    }
+    const fields = [];
+    const merged = mergeValue(sync.bases[id], local, remote.book, fields);
+    if (fields.length) {
+      sync.conflicts[id] = { remote, fields };
+      return;
+    }
+    if (!same(local, merged)) {
+      books[id] = merged;
+      refreshView(id);
+    }
+    sync.shas[id] = remote.sha;
+    sync.bases[id] = copy(remote.book);
+    delete sync.conflicts[id];
+    if (same(merged, remote.book)) delete sync.dirty[id];
   }
 
   let syncing = false;
-  async function pullAll() {
-    if (!ghReady() || syncing) return;
-    syncing = true;
-    setStatus('불러오는 중…');
-    try {
-      const list = await gh(DATA_DIR, { allow404: true }) || [];
-      const remoteIds = {};
-      let changed = false;
-      for (const f of list) {
-        if (!f.name.endsWith('.json')) continue;
-        const id = f.name.slice(0, -5);
-        remoteIds[id] = f.sha;
-        if (sync.deleted[id]) continue;
-        if (sync.shas[id] === f.sha) continue; // 바뀐 것 없음
-        const r = await fetchRemoteBook(id);
-        if (!r) continue;
-        const local = books[id];
-        if (!local || !sync.dirty[id] || (r.book.updatedAt || '') > (local.updatedAt || '')) {
-          books[id] = r.book;
-          delete sync.dirty[id];
-          changed = true;
-        }
-        sync.shas[id] = r.sha;
-      }
-      // 다른 기기에서 지운 책: 원격에 없고, 이 기기에서 바뀐 적도 없으면 지움
-      Object.keys(books).forEach(id => {
-        if (!remoteIds[id] && sync.shas[id] && !sync.dirty[id]) {
-          delete books[id]; delete sync.shas[id];
-          changed = true;
-        }
-      });
-      store(LS_BOOKS, books); store(LS_SYNC, sync);
-      syncing = false;
-      await pushDirty();
-      if (changed) render();
-    } catch (e) {
-      syncing = false;
-      setStatus('동기화 실패: ' + e.message, true);
-    }
+  let syncAgain = false;
+  let configuring = false;
+
+  function refreshView(id) {
+    if (view.name === 'list' || (view.name === 'book' && view.bookId === id)) render();
   }
 
-  async function pushDirty() {
-    if (!ghReady() || syncing) return;
-    const ids = Object.keys(sync.dirty);
-    const delIds = Object.keys(sync.deleted);
-    if (!ids.length && !delIds.length) {
-      setStatus('GitHub와 맞춰짐 ' + new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
-      return;
-    }
-    syncing = true;
-    setStatus('GitHub에 저장 중…');
-    try {
-      for (const id of ids) {
-        const book = books[id];
-        if (!book) { delete sync.dirty[id]; continue; }
-        const version = book.updatedAt;
-        await putBook(book);
-        // 올리는 사이에 또 고쳤으면 다음 차례에 다시 올린다
-        if (!books[id] || books[id].updatedAt === version) delete sync.dirty[id];
-        else scheduleSync();
-        store(LS_SYNC, sync);
-      }
-      for (const id of delIds) {
-        let sha = sync.deleted[id];
-        if (sha === true) { const r = await fetchRemoteBook(id); sha = r && r.sha; }
-        if (sha) {
-          try {
-            await gh(DATA_DIR + '/' + id + '.json', { method: 'DELETE', body: { message: '책 삭제: ' + id, sha: sha } });
-          } catch (e) { if (e.status !== 404 && e.status !== 409) throw e; }
-        }
-        delete sync.deleted[id]; delete sync.shas[id];
-        store(LS_SYNC, sync);
-      }
-      syncing = false;
-      setStatus('GitHub에 저장됨 ' + new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
-    } catch (e) {
-      syncing = false;
-      setStatus('GitHub 저장 실패: ' + e.message, true);
-    }
-  }
+  async function pullAll() { return runSync(true); }
+  async function pushDirty() { return runSync(false); }
 
-  async function putBook(book, retried) {
-    const body = {
-      message: (book.title || '제목 없음') + ' 기록 ' + todayStr(),
-      content: b64encode(JSON.stringify(book, null, 2) + '\n')
-    };
-    if (sync.shas[book.id]) body.sha = sync.shas[book.id];
+  async function runSync(pull) {
+    if (!ghReady() || configuring) return;
+    if (syncing) { syncAgain = true; return; }
+    if (!persist()) return;
+
+    syncing = true;
+    setStatus('GitHub 동기화 중…');
     try {
-      const r = await gh(DATA_DIR + '/' + book.id + '.json', { method: 'PUT', body: body });
-      sync.shas[book.id] = r.content.sha;
-    } catch (e) {
-      // 다른 기기가 먼저 저장한 경우: 원격이 더 최신이면 원격을 받고, 아니면 덮어쓴다
-      if ((e.status === 409 || e.status === 422) && !retried) {
-        const remote = await fetchRemoteBook(book.id);
-        if (remote && (remote.book.updatedAt || '') > (book.updatedAt || '')) {
-          books[book.id] = remote.book; sync.shas[book.id] = remote.sha;
-          store(LS_BOOKS, books);
-          render();
-          return;
+      const repoId = await verifyPrivateRepo();
+      const current = state.profiles[state.active];
+      if (current.repoId != null && current.repoId !== repoId) throw new Error('기록 저장소가 바뀌었어요.');
+      current.repoId = repoId;
+
+      if (pull) {
+        const list = await gh(DATA_DIR, { allow404: true }) || [];
+        for (const file of list) {
+          if (file.type !== 'file' || !/^[a-z0-9]+\.json$/.test(file.name)) continue;
+          const id = file.name.slice(0, -5);
+          if (sync.dirty[id] || sync.deleted[id] || (sync.shas[id] === file.sha && books[id] && sync.bases[id])) continue;
+          const remote = await fetchRemoteBook(id);
+          if (remote) reconcile(id, remote);
         }
-        sync.shas[book.id] = remote ? remote.sha : undefined;
-        return putBook(book, true);
       }
-      throw e;
+
+      // Earlier versions queued permanent deletion. Convert those requests to recoverable trash.
+      for (const id of Object.keys(sync.deleted)) {
+        const remote = await fetchRemoteBook(id);
+        const book = remote ? remote.book : books[id];
+        if (book) {
+          books[id] = { ...book, trashedAt: new Date().toISOString() };
+          sync.dirty[id] = true;
+          if (remote) {
+            sync.bases[id] = copy(remote.book);
+            sync.shas[id] = remote.sha;
+          }
+        }
+        delete sync.deleted[id];
+      }
+      if (!persist()) return;
+
+      for (const id of Object.keys(sync.dirty)) {
+        const remote = await fetchRemoteBook(id);
+        if (remote) reconcile(id, remote);
+        if (!persist()) return;
+        if (sync.conflicts[id] || !sync.dirty[id] || !books[id]) continue;
+
+        if (await verifyPrivateRepo() !== repoId) throw new Error('기록 저장소가 바뀌었어요.');
+        const book = copy(books[id]);
+        const result = await gh(DATA_DIR + '/' + encodeURIComponent(id) + '.json', {
+          method: 'PUT',
+          body: {
+            message: '독서 기록 저장',
+            content: b64encode(JSON.stringify(book, null, 2) + '\n'),
+            ...(remote ? { sha: remote.sha } : {})
+          }
+        });
+        sync.shas[id] = result.content.sha;
+        sync.bases[id] = book;
+        if (same(books[id], book)) delete sync.dirty[id];
+        if (!persist()) return;
+      }
+
+      const conflicts = Object.keys(sync.conflicts).length;
+      setStatus(conflicts ? '동기화 충돌 ' + conflicts + '건 · 설정에서 확인' : 'GitHub 동기화 완료', !!conflicts);
+      if (view.name === 'settings') renderRecovery();
+    } catch (e) {
+      setStatus('동기화 실패 · ' + e.message, true);
+    } finally {
+      syncing = false;
+      if (syncAgain) {
+        syncAgain = false;
+        setTimeout(pullAll, 0);
+      }
     }
   }
 
@@ -259,7 +372,7 @@
   function go(v) { view = v; render(); window.scrollTo(0, 0); }
 
   function render() {
-    if (view.name === 'book' && !books[view.bookId]) view = { name: 'list' };
+    if (view.name === 'book' && (!books[view.bookId] || books[view.bookId].trashedAt)) view = { name: 'list' };
     if (view.name === 'list') renderList();
     else if (view.name === 'newbook') renderBookForm(null);
     else if (view.name === 'editbook') renderBookForm(books[view.bookId]);
@@ -271,6 +384,7 @@
 
   function sortedBooks(status) {
     return Object.values(books)
+      .filter(b => !b.trashedAt)
       .filter(b => (status === 'done' ? b.status === 'done' : b.status !== 'done'))
       .sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
   }
@@ -334,7 +448,8 @@
     document.getElementById('f-save').addEventListener('click', () => {
       const title = document.getElementById('f-title').value.trim();
       if (!title) { alert('책 이름을 적어주세요.'); return; }
-      const target = book || { id: uid(), status: 'reading', entries: [], createdAt: new Date().toISOString() };
+      const target = isNew ? { id: uid(), status: 'reading', entries: [], createdAt: new Date().toISOString() } : books[book.id];
+      if (!target || target.trashedAt) { go({ name: 'list' }); return; }
       target.title = title;
       target.author = document.getElementById('f-author').value.trim();
       target.format = format;
@@ -345,12 +460,10 @@
       go({ name: 'book', bookId: target.id, date: todayStr() });
     });
     if (!isNew) document.getElementById('f-delete').addEventListener('click', () => {
-      if (!confirm('"' + book.title + '"의 모든 기록을 지울까요? 되돌릴 수 없어요.')) return;
-      delete books[book.id];
-      sync.deleted[book.id] = sync.shas[book.id] || true;
-      delete sync.dirty[book.id];
-      store(LS_BOOKS, books); store(LS_SYNC, sync);
-      scheduleSync();
+      const current = books[book.id];
+      if (!current || !confirm('"' + current.title + '"을 휴지통으로 옮길까요? 설정에서 복원할 수 있어요.')) return;
+      current.trashedAt = new Date().toISOString();
+      saveBook(current);
       go({ name: 'list' });
     });
   }
@@ -524,10 +637,10 @@
 
   function renderExport() {
     const book = books[view.bookId];
-    if (!book) { go({ name: 'list' }); return; }
+    if (!book || book.trashedAt) { go({ name: 'list' }); return; }
     const entry = getEntry(book, view.date);
     const tab = view.tab || 'blog';
-    const opts = { intro: settings.intro, outro: settings.outro };
+    const opts = { intro: state.intro, outro: state.outro };
     const tabs = [['blog', '네이버 블로그'], ['threads', 'Threads'], ['long', '롱폼 대본'], ['short', '쇼츠·릴스 대본']];
     let body = '';
     if (!entry || !F.hasContent(entry)) {
@@ -565,6 +678,7 @@
   function renderDayExport() {
     const date = view.date || todayStr();
     const items = Object.values(books)
+      .filter(book => !book.trashedAt)
       .map(b => ({ book: b, entry: getEntry(b, date) }))
       .filter(it => it.entry && F.hasContent(it.entry))
       .sort((a, b) => (a.book.startDate || '').localeCompare(b.book.startDate || ''));
@@ -573,11 +687,87 @@
       '<h1>하루 롱폼 대본</h1>' +
       '<div class="date-bar"><input type="date" id="pick-date" value="' + esc(date) + '" aria-label="날짜"></div>' +
       '<p class="muted small">' + fmtDate(date) + '에 기록한 ' + items.length + '권을 한 영상으로 묶었어요.</p>' +
-      '<div class="card">' + (items.length ? scriptHtml(F.dayLongScript(items, { intro: settings.intro, outro: settings.outro }), 'o-day') :
+      '<div class="card">' + (items.length ? scriptHtml(F.dayLongScript(items, { intro: state.intro, outro: state.outro }), 'o-day') :
         '<div class="empty">이 날 기록한 책이 없어요.</div>') + '</div>';
     document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
     document.getElementById('pick-date').addEventListener('change', e => { if (e.target.value) go({ name: 'dayexport', date: e.target.value }); });
     bindCopy();
+  }
+
+  function renderRecovery() {
+    const section = document.getElementById('recovery');
+    if (!section) return;
+    const conflicts = Object.entries(sync.conflicts);
+    const trash = Object.values(books).filter(book => book.trashedAt);
+    section.innerHTML = '<div class="card"><h2>동기화 충돌</h2>' +
+      (conflicts.length ? '<p class="small">같은 항목이 두 기기에서 바뀌었어요. 겹치지 않는 변경은 함께 보존돼요. 원본 두 버전은 백업 파일로 저장할 수 있어요.</p>' :
+        '<p class="small muted">해결할 충돌이 없어요.</p>') +
+      conflicts.map(([id, conflict]) =>
+        '<details><summary>' + esc(books[id]?.title || id) + ' · 변경 비교</summary>' +
+        '<p class="small">겹친 항목: ' + esc(conflict.fields.join(', ')) + '</p>' +
+        '<h3>이 기기 기록</h3><textarea readonly aria-label="이 기기 기록">' + esc(JSON.stringify(books[id], null, 2)) + '</textarea>' +
+        '<h3>GitHub 기록</h3><textarea readonly aria-label="GitHub 기록">' + esc(JSON.stringify(conflict.remote.book, null, 2)) + '</textarea>' +
+        '<div class="actions"><button class="btn small" type="button" data-conflict="' + esc(id) + '" data-choice="local">겹친 항목은 이 기기 버전 사용</button>' +
+        '<button class="btn ghost small" type="button" data-conflict="' + esc(id) + '" data-choice="remote">겹친 항목은 GitHub 버전 사용</button></div></details>').join('') +
+      '</div><div class="card"><h2>휴지통</h2>' +
+      (trash.length ? trash.map(book => '<p>' + esc(book.title) +
+        ' <button class="btn ghost small" type="button" data-restore="' + esc(book.id) + '">복원</button></p>').join('') :
+        '<p class="small muted">휴지통이 비어 있어요.</p>') + '</div>';
+
+    section.querySelectorAll('[data-restore]').forEach(button => button.addEventListener('click', () => {
+      const book = books[button.dataset.restore];
+      delete book.trashedAt;
+      saveBook(book);
+      renderRecovery();
+    }));
+    section.querySelectorAll('[data-conflict]').forEach(button => button.addEventListener('click', () => {
+      const id = button.dataset.conflict;
+      const conflict = sync.conflicts[id];
+      if (!conflict || syncing || configuring) return;
+      const { remote } = conflict;
+      const merged = mergeValue(sync.bases[id], books[id], remote.book, [], button.dataset.choice);
+      sync.shas[id] = remote.sha;
+      sync.bases[id] = remote.book;
+      delete sync.conflicts[id];
+      saveBook(merged);
+      renderRecovery();
+    }));
+  }
+
+  async function changeConnection(account) {
+    if (syncing || configuring) { setStatus('동기화가 끝난 뒤 다시 눌러주세요.'); return; }
+    if (!account.owner || !account.repo || !account.token ||
+        !/^[a-z\d-]+$/i.test(account.owner) || !/^[a-z\d_.-]+$/i.test(account.repo) ||
+        account.repo === '.' || account.repo === '..') {
+      setStatus('GitHub 아이디, 저장소 이름, 토큰을 확인해 주세요.', true);
+      return;
+    }
+    configuring = true;
+    setStatus('비공개 저장소인지 확인 중…');
+    try {
+      const repoId = await verifyPrivateRepo(account);
+      const key = targetKey(account.owner, account.repo);
+      const current = state.profiles[key];
+      if (current?.repoId != null && current.repoId !== repoId) throw new Error('기록 저장소가 바뀌었어요.');
+      const next = current || (state.active === '' ? state.profiles[''] : profile());
+      if (!current && state.active === '') {
+        Object.keys(next.books).forEach(id => { next.sync.dirty[id] = true; });
+      }
+      const previousState = state;
+      state = { ...state, active: key, profiles: { ...state.profiles, [key]: { ...next, repoId } } };
+      if (state.active !== previousState.active && previousState.active === '' && !current) delete state.profiles[''];
+      if (!persist()) { state = previousState; return; }
+      ({ books, sync } = state.profiles[key]);
+      settings = account;
+      if (view.name === 'settings') renderSettings();
+      else if (previousState.active !== state.active) go({ name: 'list' });
+    } catch (e) {
+      setStatus('연결 실패 · ' + e.message, true);
+      return;
+    } finally {
+      configuring = false;
+    }
+    await pullAll();
   }
 
   function renderSettings() {
@@ -585,10 +775,10 @@
       '<button class="back" type="button" id="back">← 책 목록</button>' +
       '<h1>설정</h1>' +
       '<div class="card"><h2>GitHub 연결 (기기 간 동기화)</h2>' +
-      '<p class="small muted">기록은 비공개 저장소의 <code>books/</code> 폴더에 책마다 파일 하나로 저장돼요. 토큰은 이 기기 브라우저에만 저장되고, 휴대폰과 컴퓨터에서 각각 한 번씩 입력하면 돼요.</p>' +
+      '<p class="small muted">기록은 비공개 저장소의 <code>books/</code> 폴더에 저장돼요. 저장소를 바꾸면 해당 저장소의 기록이 열려요. 토큰은 페이지를 닫거나 새로 열면 다시 입력해요.</p>' +
       '<label for="s-owner">GitHub 아이디</label><input id="s-owner" type="text" autocapitalize="off" autocomplete="off" value="' + esc(settings.owner) + '">' +
       '<label for="s-repo">기록 저장소 이름</label><input id="s-repo" type="text" autocapitalize="off" autocomplete="off" value="' + esc(settings.repo) + '">' +
-      '<label for="s-token">토큰 (fine-grained personal access token)</label><input id="s-token" type="password" autocomplete="off" value="' + esc(settings.token) + '">' +
+      '<label for="s-token">토큰 (fine-grained personal access token)</label><input id="s-token" type="password" autocomplete="off">' +
       '<p class="small muted">토큰 만들기: GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token. ' +
       'Repository access는 기록 저장소 <strong>하나만</strong> 고르고, Permissions에서 <strong>Contents: Read and write</strong>만 켜요.</p>' +
       '<div class="actions"><button class="btn" id="s-save" type="button">저장하고 동기화</button>' +
@@ -597,36 +787,36 @@
       '</div>' +
       '<div class="card"><h2>내 인사말</h2>' +
       '<p class="small muted">포스팅용 글과 영상 대본의 시작과 끝에 그대로 들어가요. 비워두면 넣지 않아요. 이 기기에만 저장돼요.</p>' +
-      '<label for="s-intro">영상 시작 인사</label><textarea id="s-intro" style="min-height:60px" placeholder="예: 오늘도 읽고 버틴 하루, 기록을 나눠요.">' + esc(settings.intro) + '</textarea>' +
-      '<label for="s-outro">마무리 인사 (블로그·영상 끝)</label><textarea id="s-outro" style="min-height:60px">' + esc(settings.outro) + '</textarea>' +
+      '<label for="s-intro">영상 시작 인사</label><textarea id="s-intro" style="min-height:60px" placeholder="예: 오늘도 읽고 버틴 하루, 기록을 나눠요.">' + esc(state.intro) + '</textarea>' +
+      '<label for="s-outro">마무리 인사 (블로그·영상 끝)</label><textarea id="s-outro" style="min-height:60px">' + esc(state.outro) + '</textarea>' +
       '</div>' +
       '<div class="card"><h2>백업</h2>' +
       '<p class="small muted">모든 기록을 파일 하나로 내려받거나, 백업 파일에서 불러와요.</p>' +
       '<div class="actions"><button class="btn ghost" id="b-export" type="button">백업 내려받기</button>' +
       '<label class="btn ghost" style="margin:0;color:var(--accent)">백업 불러오기<input id="b-import" type="file" accept="application/json" hidden></label></div>' +
-      '</div>';
+      '</div><div id="recovery"></div>';
     document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
     document.getElementById('s-save').addEventListener('click', () => {
-      settings.owner = document.getElementById('s-owner').value.trim();
-      settings.repo = document.getElementById('s-repo').value.trim();
-      settings.token = document.getElementById('s-token').value.trim();
-      store(LS_SETTINGS, settings);
-      // 처음 연결할 때 이 기기에만 있던 책도 올라가도록 표시
-      Object.keys(books).forEach(id => { if (!sync.shas[id]) sync.dirty[id] = true; });
-      store(LS_SYNC, sync);
-      pullAll();
+      const owner = document.getElementById('s-owner').value.trim();
+      const repo = document.getElementById('s-repo').value.trim();
+      const token = document.getElementById('s-token').value.trim() ||
+        (targetKey(owner, repo) === state.active ? settings.token : '');
+      changeConnection({ owner, repo, token });
     });
     document.getElementById('s-sync').addEventListener('click', () => pullAll());
     ['intro', 'outro'].forEach(k => document.getElementById('s-' + k).addEventListener('input', e => {
-      settings[k] = e.target.value; store(LS_SETTINGS, settings);
+      state[k] = e.target.value; persist();
     }));
     const forget = document.getElementById('s-forget');
     if (forget) forget.addEventListener('click', () => {
+      if (syncing || configuring) { setStatus('동기화가 끝난 뒤 다시 눌러주세요.'); return; }
       if (!confirm('이 기기에서 토큰을 지울까요? 기록은 남아 있어요.')) return;
-      settings.token = ''; store(LS_SETTINGS, settings); setStatus(''); render();
+      settings.token = '';
+      if (persist()) setStatus('이 기기에만 저장');
+      render();
     });
     document.getElementById('b-export').addEventListener('click', () => {
-      const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), books: books }, null, 2)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), books, conflicts: sync.conflicts }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = 'reading-notes-backup-' + todayStr() + '.json';
@@ -635,19 +825,25 @@
     });
     document.getElementById('b-import').addEventListener('change', async e => {
       const file = e.target.files[0]; if (!file) return;
+      const previousProfile = state.active;
       try {
         const data = JSON.parse(await file.text());
-        const incoming = data.books || {};
-        const n = Object.keys(incoming).length;
-        if (!confirm(n + '권의 기록을 불러올까요? 같은 책은 더 최근 것으로 바뀌어요.')) return;
-        Object.values(incoming).forEach(b => {
-          const cur = books[b.id];
-          if (!cur || (b.updatedAt || '') > (cur.updatedAt || '')) { books[b.id] = b; sync.dirty[b.id] = true; }
+        if (previousProfile !== state.active || syncing || configuring) return;
+        if (!data.books || typeof data.books !== 'object' || Array.isArray(data.books)) throw new Error('책 목록이 없어요.');
+        const entries = Object.entries(data.books);
+        entries.forEach(([id, book]) => validateBook(book, id));
+        const additions = entries.filter(([id]) => !Object.hasOwn(books, id));
+        if (!confirm(additions.length + '권을 불러올까요? 이미 있는 책 ' + (entries.length - additions.length) + '권은 그대로 둬요.')) return;
+        additions.forEach(([id, book]) => {
+          books[id] = book;
+          sync.dirty[id] = true;
         });
-        store(LS_BOOKS, books); store(LS_SYNC, sync); scheduleSync();
+        if (!persist()) return;
+        scheduleSync();
         alert('불러왔어요.'); go({ name: 'list' });
       } catch (err) { alert('백업 파일을 읽지 못했어요: ' + err.message); }
     });
+    renderRecovery();
   }
 
   // 상단 버튼과 안내 링크
@@ -663,9 +859,15 @@
     if (document.visibilityState === 'visible') pullAll();
     else pushDirty();
   });
-  window.addEventListener('beforeunload', () => { if (Object.keys(sync.dirty).length) pushDirty(); });
+  window.addEventListener('beforeunload', event => {
+    if (!storageFailed) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
 
   render();
-  if (ghReady()) pullAll();
-  else setStatus('이 기기에만 저장');
+  if (persist()) {
+    if (ghReady()) pullAll();
+    else setStatus('이 기기에만 저장');
+  }
 })();
