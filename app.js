@@ -265,6 +265,8 @@
     else if (view.name === 'editbook') renderBookForm(books[view.bookId]);
     else if (view.name === 'book') renderBook();
     else if (view.name === 'settings') renderSettings();
+    else if (view.name === 'export') renderExport();
+    else if (view.name === 'dayexport') renderDayExport();
   }
 
   function sortedBooks(status) {
@@ -295,12 +297,14 @@
       '<h1>읽고 있는 책</h1>' +
       '<p class="muted small">' + fmtDate(t) + ' · 문장이 서툴러도 괜찮아요. 오늘 읽은 만큼만 적어요.</p>' +
       (!ghReady() ? '<p class="notice">아직 이 기기에만 저장돼요. <a href="#" data-go="settings">설정</a>에서 GitHub를 연결하면 휴대폰과 컴퓨터가 같은 기록을 봐요.</p>' : '') +
-      '<div class="actions"><button class="btn" data-go="newbook" type="button">+ 새 책 시작하기</button></div>' +
+      '<div class="actions"><button class="btn" data-go="newbook" type="button">+ 새 책 시작하기</button>' +
+      '<button class="btn ghost" id="day-export" type="button">오늘 기록으로 롱폼 대본 만들기</button></div>' +
       '<div class="book-list" style="margin-top:12px">' +
       (reading.length ? reading.map(card).join('') : '<div class="empty">아직 읽고 있는 책이 없어요.</div>') +
       '</div>' +
       (done.length ? '<h2 style="margin-top:28px">다 읽은 책 (' + done.length + ')</h2><div class="book-list">' + done.map(card).join('') + '</div>' : '');
     app.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => go({ name: 'book', bookId: el.dataset.open, date: todayStr() })));
+    document.getElementById('day-export').addEventListener('click', () => go({ name: 'dayexport', date: todayStr() }));
   }
 
   function renderBookForm(book) {
@@ -388,6 +392,7 @@
       '<div class="date-chips">' + dates.map(d => '<button type="button" class="chip' + (d === date ? ' on' : '') + '" data-date="' + d + '">' +
         (d === todayStr() ? '오늘' : fmtDate(d)) + '</button>').join('') + '</div>' +
       '<label for="pages">오늘 읽은 곳 (선택)</label><input id="pages" type="text" placeholder="예: 45~92쪽, 3장까지" value="' + esc(entry.pages) + '">' +
+      '<div class="actions"><button class="btn small" id="to-export" type="button">이 날 기록으로 포스팅용 글 만들기</button></div>' +
       '</div>' +
 
       '<div class="card"><h2><span class="section-num">2</span>발췌한 문장</h2>' +
@@ -404,6 +409,7 @@
       '</div>';
 
     document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
+    document.getElementById('to-export').addEventListener('click', () => go({ name: 'export', bookId: book.id, date: date, tab: 'blog' }));
     document.getElementById('edit-book').addEventListener('click', () => go({ name: 'editbook', bookId: book.id }));
     const fin = document.getElementById('finish');
     if (fin) fin.addEventListener('click', () => { book.status = 'done'; book.finishedDate = todayStr(); commit(); render(); });
@@ -484,6 +490,96 @@
       '</div></div>';
   }
 
+  // ---------- 포스팅용 글 ----------
+  const F = window.ReadingFormats;
+
+  function copyBtn(id, label) {
+    return '<button class="btn small" type="button" data-copy="' + id + '">' + (label || '복사') + '</button>';
+  }
+  function textBlock(id, text) {
+    return '<pre class="out" id="' + id + '">' + esc(text) + '</pre>';
+  }
+  function bindCopy() {
+    app.querySelectorAll('[data-copy]').forEach(btn => btn.addEventListener('click', async () => {
+      const el = document.getElementById(btn.dataset.copy);
+      const text = el.dataset.raw != null ? el.dataset.raw : el.textContent;
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); ta.remove();
+      }
+      const old = btn.textContent; btn.textContent = '복사됨'; setTimeout(() => { btn.textContent = old; }, 1200);
+    }));
+  }
+  function scriptHtml(script, idPrefix) {
+    const mm = Math.floor(script.totalSec / 60), ss = script.totalSec % 60;
+    return '<p class="small"><strong>예상 길이 약 ' + (mm ? mm + '분 ' : '') + ss + '초</strong> <span class="muted">(1초에 5글자 정도로 읽는다고 계산한 대략값)</span></p>' +
+      (script.note ? '<p class="notice">' + esc(script.note) + '</p>' : '') +
+      '<div class="actions">' + copyBtn(idPrefix + '-all', '대본 전체 복사') + '</div>' +
+      '<div hidden id="' + idPrefix + '-all" data-raw="' + esc(F.scriptText(script)) + '"></div>' +
+      script.scenes.map(s => '<div class="scene"><div class="small muted">' + esc(s.part) + ' · 약 ' + s.sec + '초</div>' +
+        (s.screen ? '<div class="scene-screen">' + esc(s.screen) + '</div>' : '') +
+        (s.say ? '<div class="scene-say">🎙 ' + esc(s.say) + '</div>' : '') + '</div>').join('');
+  }
+
+  function renderExport() {
+    const book = books[view.bookId];
+    if (!book) { go({ name: 'list' }); return; }
+    const entry = getEntry(book, view.date);
+    const tab = view.tab || 'blog';
+    const opts = { intro: settings.intro, outro: settings.outro };
+    const tabs = [['blog', '네이버 블로그'], ['threads', 'Threads'], ['long', '롱폼 대본'], ['short', '쇼츠·릴스 대본']];
+    let body = '';
+    if (!entry || !F.hasContent(entry)) {
+      body = '<div class="empty">이 날 기록이 아직 없어요.</div>';
+    } else if (tab === 'blog') {
+      const b = F.blog(book, entry, opts);
+      body = '<label>제목</label>' + textBlock('o-title', b.title) + '<div class="actions">' + copyBtn('o-title', '제목 복사') + '</div>' +
+        '<label>본문</label>' + textBlock('o-body', b.body) + '<div class="actions">' + copyBtn('o-body', '본문 복사') + '</div>';
+    } else if (tab === 'threads') {
+      const posts = F.threads(book, entry);
+      body = '<p class="small muted">' + posts.length + '개 글을 순서대로 이어서 올려요. 첫 글을 올리고, 나머지는 그 글의 답글로 달면 돼요.</p>' +
+        posts.map((p, i) => '<div class="scene"><div class="quote-head"><span class="small muted">' + (i + 1) + '번째 · ' + p.length + '/' + F.THREADS_LIMIT + '자</span>' + copyBtn('o-t' + i) + '</div>' + textBlock('o-t' + i, p) + '</div>').join('');
+    } else if (tab === 'long') {
+      body = '<p class="small muted">하루 한 권만으로는 짧을 수 있어요. 목록 화면의 "오늘 기록으로 롱폼 대본 만들기"는 오늘 읽은 책을 모두 묶어줘요.</p>' +
+        scriptHtml(F.longScript(book, entry, opts), 'o-long');
+    } else {
+      const qs = (entry.quotes || []).filter(q => q.text && q.text.trim());
+      const qi = Math.min(view.qi || 0, Math.max(qs.length - 1, 0));
+      body = (qs.length > 1 ? '<label>쓸 문장 고르기</label><div class="date-chips">' + qs.map((q, i) =>
+        '<button type="button" class="chip' + (i === qi ? ' on' : '') + '" data-qpick="' + i + '">문장 ' + (i + 1) + '</button>').join('') + '</div>' : '') +
+        scriptHtml(F.shortScript(book, entry, { quoteIndex: qi }), 'o-short');
+    }
+    app.innerHTML =
+      '<button class="back" type="button" id="back">← ' + esc(book.title) + '</button>' +
+      '<h1>포스팅용 글</h1>' +
+      '<p class="muted small">' + fmtDate(view.date) + ' 기록 · 내가 쓴 문장은 그대로 두고 순서와 형식만 바꿨어요.</p>' +
+      '<div class="date-chips">' + tabs.map(([k, l]) => '<button type="button" class="chip' + (k === tab ? ' on' : '') + '" data-tab="' + k + '">' + l + '</button>').join('') + '</div>' +
+      '<div class="card">' + body + '</div>';
+    document.getElementById('back').addEventListener('click', () => go({ name: 'book', bookId: book.id, date: view.date }));
+    app.querySelectorAll('[data-tab]').forEach(el => el.addEventListener('click', () => { view.tab = el.dataset.tab; render(); }));
+    app.querySelectorAll('[data-qpick]').forEach(el => el.addEventListener('click', () => { view.qi = Number(el.dataset.qpick); render(); }));
+    bindCopy();
+  }
+
+  function renderDayExport() {
+    const date = view.date || todayStr();
+    const items = Object.values(books)
+      .map(b => ({ book: b, entry: getEntry(b, date) }))
+      .filter(it => it.entry && F.hasContent(it.entry))
+      .sort((a, b) => (a.book.startDate || '').localeCompare(b.book.startDate || ''));
+    app.innerHTML =
+      '<button class="back" type="button" id="back">← 책 목록</button>' +
+      '<h1>하루 롱폼 대본</h1>' +
+      '<div class="date-bar"><input type="date" id="pick-date" value="' + esc(date) + '" aria-label="날짜"></div>' +
+      '<p class="muted small">' + fmtDate(date) + '에 기록한 ' + items.length + '권을 한 영상으로 묶었어요.</p>' +
+      '<div class="card">' + (items.length ? scriptHtml(F.dayLongScript(items, { intro: settings.intro, outro: settings.outro }), 'o-day') :
+        '<div class="empty">이 날 기록한 책이 없어요.</div>') + '</div>';
+    document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
+    document.getElementById('pick-date').addEventListener('change', e => { if (e.target.value) go({ name: 'dayexport', date: e.target.value }); });
+    bindCopy();
+  }
+
   function renderSettings() {
     app.innerHTML =
       '<button class="back" type="button" id="back">← 책 목록</button>' +
@@ -498,6 +594,11 @@
       '<div class="actions"><button class="btn" id="s-save" type="button">저장하고 동기화</button>' +
       '<button class="btn ghost" id="s-sync" type="button">지금 동기화</button>' +
       (settings.token ? '<button class="btn danger" id="s-forget" type="button">이 기기에서 토큰 지우기</button>' : '') + '</div>' +
+      '</div>' +
+      '<div class="card"><h2>내 인사말</h2>' +
+      '<p class="small muted">포스팅용 글과 영상 대본의 시작과 끝에 그대로 들어가요. 비워두면 넣지 않아요. 이 기기에만 저장돼요.</p>' +
+      '<label for="s-intro">영상 시작 인사</label><textarea id="s-intro" style="min-height:60px" placeholder="예: 오늘도 읽고 버틴 하루, 기록을 나눠요.">' + esc(settings.intro) + '</textarea>' +
+      '<label for="s-outro">마무리 인사 (블로그·영상 끝)</label><textarea id="s-outro" style="min-height:60px">' + esc(settings.outro) + '</textarea>' +
       '</div>' +
       '<div class="card"><h2>백업</h2>' +
       '<p class="small muted">모든 기록을 파일 하나로 내려받거나, 백업 파일에서 불러와요.</p>' +
@@ -516,6 +617,9 @@
       pullAll();
     });
     document.getElementById('s-sync').addEventListener('click', () => pullAll());
+    ['intro', 'outro'].forEach(k => document.getElementById('s-' + k).addEventListener('input', e => {
+      settings[k] = e.target.value; store(LS_SETTINGS, settings);
+    }));
     const forget = document.getElementById('s-forget');
     if (forget) forget.addEventListener('click', () => {
       if (!confirm('이 기기에서 토큰을 지울까요? 기록은 남아 있어요.')) return;
