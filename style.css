@@ -184,3 +184,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .qchev { flex: none; font-size: .7rem; color: var(--muted); }
 .qrow.open .quote { margin-top: 0; }
 .pager { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
+
+.rs-post { min-height: 140px; margin-top: 6px; }
+.over { color: var(--warn); font-weight: 700; }
+
+a { color: var(--accent); }

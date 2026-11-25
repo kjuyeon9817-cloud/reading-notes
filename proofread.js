@@ -173,3 +173,85 @@ export async function proofreadLMStudio(url, model, fields) {
   } catch (e) { throw new Error('모델이 형식에 맞지 않는 답을 줬어요. 다시 살펴보기를 눌러주세요.'); }
   return clean(fields, parsed.suggestions);
 }
+
+// ---------- 어투·목표 독자 맞춤 재구성 (자유 글 생성) ----------
+// cfg = { provider, lmUrl, lmModel, ollamaUrl, ollamaModel, claudeKey }
+// onText(지금까지 본문), onReasoning(추론 글자 수). 최종 본문을 돌려준다.
+export async function generateText(cfg, messages, opts) {
+  opts = opts || {};
+  const onText = opts.onText || (() => {});
+  const onReasoning = opts.onReasoning || (() => {});
+  const temperature = opts.temperature == null ? 0.7 : opts.temperature;
+
+  if (cfg.provider === 'lmstudio') {
+    let res;
+    try {
+      res = await fetch(lmBase(cfg.lmUrl) + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: cfg.lmModel, messages, temperature, max_tokens: 4096, stream: true }),
+        signal: opts.signal
+      });
+    } catch (e) { if (e.name === 'AbortError') throw e; throw lmError(e); }
+    if (!res.ok || !res.body) throw new Error('LM Studio 응답 오류 ' + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', content = '', rlen = 0, done = false;
+    while (!done) {
+      const r = await reader.read();
+      if (r.done) break;
+      buf += dec.decode(r.value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') { done = true; break; }
+        let j; try { j = JSON.parse(payload); } catch (e) { continue; }
+        const d = (j.choices && j.choices[0] && j.choices[0].delta) || {};
+        const rc = d.reasoning_content || d.reasoning;
+        if (rc) { rlen += rc.length; onReasoning(rlen); }
+        if (d.content) { content += d.content; onText(stripThink(content)); }
+      }
+    }
+    return stripThink(content).trim();
+  }
+
+  if (cfg.provider === 'ollama') {
+    let res;
+    try {
+      res = await fetch(ollamaBase(cfg.ollamaUrl) + '/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: cfg.ollamaModel, stream: false, options: { temperature }, messages }),
+        signal: opts.signal
+      });
+    } catch (e) { if (e.name === 'AbortError') throw e; throw ollamaError(e); }
+    if (!res.ok) throw new Error('Ollama 응답 오류 ' + res.status);
+    const j = await res.json();
+    const text = stripThink(j.message && j.message.content).trim();
+    onText(text);
+    return text;
+  }
+
+  const { default: Anthropic } = await import('./vendor/anthropic-sdk.js');
+  const client = new Anthropic({ apiKey: cfg.claudeKey, dangerouslyAllowBrowser: true });
+  const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+  const stream = client.beta.messages.stream({
+    model: 'claude-opus-5-5',
+    max_tokens: 64000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'medium' },
+    system,
+    messages: messages.filter(m => m.role !== 'system')
+  }, { signal: opts.signal });
+  let text = '';
+  for await (const ev of stream) {
+    if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') { text += ev.delta.text; onText(text); }
+  }
+  const msg = await stream.finalMessage();
+  if (msg.stop_reason === 'refusal') throw new Error('이 내용은 작성할 수 없다는 응답이 왔어요.');
+  return text.trim();
+}

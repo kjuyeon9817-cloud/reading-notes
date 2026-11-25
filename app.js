@@ -791,13 +791,109 @@
     if (all) all.addEventListener('click', () => { view.proof.items.forEach(applyOne); view.proof.items = []; done(); });
   }
 
+  // ---------- 어투·목표 독자 맞춤 재구성 ----------
+  function rsOpts() {
+    return Object.assign({ target: '', tone: 'friendly', platform: 'threads', format: 'short' }, state.restyle || {});
+  }
+  function setRs(patch) { state.restyle = Object.assign(rsOpts(), patch); persist(); }
+
+  function restyleHtml(entry) {
+    const o = rsOpts();
+    const st = view.rs || {};
+    const l = llm();
+    const seg = (key, items) => '<div class="date-chips">' + Object.entries(items).map(([k, v]) =>
+      '<button type="button" class="chip' + (o[key] === k ? ' on' : '') + '" data-rs="' + key + '" data-v="' + k + '">' + esc(v) + '</button>').join('') + '</div>';
+    const saved = entry.restyled;
+    let h = '<p class="small muted">내 기록을 재료로, 고른 어투와 목표 독자에 맞춰 글을 다시 구성해요. 기록에 없는 경험이나 숫자는 지어내지 않고, 책 문장은 그대로 둬요. 결과는 직접 고칠 수 있어요.</p>' +
+      '<label for="rs-target">목표 독자</label>' +
+      '<textarea id="rs-target" style="min-height:60px" placeholder="예: 하루하루 버티느라 자기 자신을 돌볼 틈이 없는 20~30대">' + esc(o.target) + '</textarea>' +
+      '<label>어투</label>' + seg('tone', Object.fromEntries(Object.entries(F.RS_TONES).map(([k, v]) => [k, v.label]))) +
+      '<label>플랫폼</label>' + seg('platform', { threads: 'Threads (500자)', x: 'X (280자)' }) +
+      '<label>분량</label>' + seg('format', Object.fromEntries(Object.entries(F.RS_FORMATS).map(([k, v]) => [k, v.label + ' ' + v.count]))) +
+      '<p class="small muted">사용 중: ' + (l.provider === 'lmstudio' ? 'LM Studio · ' + esc(l.lmModel || '모델 미선택') : l.provider === 'ollama' ? 'Ollama · ' + esc(l.ollamaModel || '모델 미선택') : 'Claude') +
+      ' (<a href="#" data-go="settings">바꾸기</a>)</p>' +
+      '<div class="actions">' + (st.busy
+        ? '<button class="btn" type="button" disabled>만드는 중…</button><button class="btn danger" type="button" id="rs-stop">⏹ 중단</button>'
+        : '<button class="btn" type="button" id="rs-run"' + (llmReady() ? '' : ' disabled') + '>' + (saved ? '다시 만들기' : '만들기') + '</button>') + '</div>' +
+      (!llmReady() ? '<p class="notice">설정에서 AI 모델을 먼저 골라주세요.</p>' : '') +
+      (st.error ? '<p class="notice">' + esc(st.error) + '</p>' : '');
+    if (st.busy) {
+      h += '<p class="small" id="rs-think">' + (st.reasoning ? '🧠 모델이 깊게 생각하는 중… (' + st.reasoning + '자 추론)' : '') + '</p>' +
+        '<pre class="out" id="rs-live">' + esc(st.raw || '') + '</pre>';
+    } else if (saved && saved.posts && saved.posts.length) {
+      const lim = (F.RS_PLATFORMS[saved.platform] || F.RS_PLATFORMS.threads).limit;
+      h += '<div class="quote-head" style="margin-top:14px"><span class="small muted">' + saved.posts.length + '개 · ' +
+        esc((F.RS_TONES[saved.tone] || {}).label || '') + ' · ' + esc(saved.platform === 'x' ? 'X' : 'Threads') + '</span>' +
+        '<button class="btn small" type="button" data-rscopy="all">전체 복사</button></div>' +
+        saved.posts.map((p, i) => {
+          const n = Array.from(p).length;
+          return '<div class="scene"><div class="quote-head"><span class="small ' + (n > lim ? 'over' : 'muted') + '" id="rs-count-' + i + '">' + (i + 1) + '/' + saved.posts.length + ' · ' + n + '/' + lim + '자' + (n > lim ? ' · 너무 길어요' : '') + '</span>' +
+            '<button class="btn small" type="button" data-rscopy="' + i + '">복사</button></div>' +
+            '<textarea class="rs-post" data-rspost="' + i + '">' + esc(p) + '</textarea></div>';
+        }).join('');
+    }
+    return h;
+  }
+
+  function bindRestyle(book, entry) {
+    const ta = document.getElementById('rs-target');
+    if (ta) ta.addEventListener('input', e => setRs({ target: e.target.value }));
+    app.querySelectorAll('[data-rs]').forEach(b => b.addEventListener('click', () => { setRs({ [b.dataset.rs]: b.dataset.v }); render(); }));
+    const run = document.getElementById('rs-run');
+    if (run) run.addEventListener('click', async () => {
+      const o = rsOpts();
+      if (!o.target.trim() && !confirm('목표 독자를 비워두고 만들까요?')) return;
+      const ctrl = new AbortController();
+      view.rs = { busy: true, raw: '', reasoning: 0, ctrl };
+      render();
+      try {
+        const mod = await import('./proofread.js');
+        const cfg = Object.assign({}, llm(), { claudeKey: settings.claudeKey });
+        const text = await mod.generateText(cfg, F.restyleMessages(book, entry, o), {
+          temperature: 0.7, signal: ctrl.signal,
+          onText: tx => { view.rs.raw = tx; const el = document.getElementById('rs-live'); if (el) { el.textContent = tx; el.scrollTop = el.scrollHeight; } },
+          onReasoning: n => { view.rs.reasoning = n; const el = document.getElementById('rs-think'); if (el) el.textContent = '🧠 모델이 깊게 생각하는 중… (' + n + '자 추론)'; }
+        });
+        const posts = F.parsePosts(text);
+        if (!posts.length) throw new Error('모델이 빈 답을 줬어요. 다시 만들어 주세요.');
+        entry.restyled = { platform: o.platform, format: o.format, tone: o.tone, target: o.target, posts, at: new Date().toISOString() };
+        saveBook(book);
+        view.rs = {};
+      } catch (e) {
+        view.rs = { error: e.name === 'AbortError' ? '만들기를 중단했어요.' : (e.message || String(e)) };
+      }
+      if (view.name === 'export') render();
+    });
+    const stop = document.getElementById('rs-stop');
+    if (stop) stop.addEventListener('click', () => { if (view.rs && view.rs.ctrl) view.rs.ctrl.abort(); });
+    const saved = entry.restyled;
+    if (!saved) return;
+    const lim = (F.RS_PLATFORMS[saved.platform] || F.RS_PLATFORMS.threads).limit;
+    app.querySelectorAll('[data-rspost]').forEach(el => el.addEventListener('input', () => {
+      const i = Number(el.dataset.rspost);
+      saved.posts[i] = el.value;
+      const n = Array.from(el.value).length;
+      const c = document.getElementById('rs-count-' + i);
+      if (c) { c.textContent = (i + 1) + '/' + saved.posts.length + ' · ' + n + '/' + lim + '자' + (n > lim ? ' · 너무 길어요' : ''); c.className = 'small ' + (n > lim ? 'over' : 'muted'); }
+      saveBook(book, { quiet: true });
+    }));
+    app.querySelectorAll('[data-rscopy]').forEach(b => b.addEventListener('click', async () => {
+      const k = b.dataset.rscopy;
+      const text = k === 'all' ? saved.posts.join('\n\n\n') : saved.posts[Number(k)];
+      try { await navigator.clipboard.writeText(text); } catch (e) {
+        const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
+      }
+      const old = b.textContent; b.textContent = '복사됨'; setTimeout(() => { b.textContent = old; }, 1200);
+    }));
+  }
+
   function renderExport() {
     const book = books[view.bookId];
     if (!book || book.trashedAt) { go({ name: 'list' }); return; }
     const entry = getEntry(book, view.date);
     const tab = view.tab || 'blog';
     const opts = { intro: state.intro, outro: state.outro };
-    const tabs = [['blog', '네이버 블로그'], ['threads', 'Threads'], ['long', '롱폼 대본'], ['short', '쇼츠·릴스 대본']];
+    const tabs = [['restyle', '✨ 타깃 맞춤 재구성'], ['blog', '네이버 블로그'], ['threads', 'Threads'], ['long', '롱폼 대본'], ['short', '쇼츠·릴스 대본']];
     let body = '';
     if (!entry || !F.hasContent(entry)) {
       body = '<div class="empty">이 날 기록이 아직 없어요.</div>';
@@ -809,6 +905,8 @@
       const posts = F.threads(book, entry);
       body = '<p class="small muted">' + posts.length + '개 글을 순서대로 이어서 올려요. 첫 글을 올리고, 나머지는 그 글의 답글로 달면 돼요.</p>' +
         posts.map((p, i) => '<div class="scene"><div class="quote-head"><span class="small muted">' + (i + 1) + '번째 · ' + p.length + '/' + F.THREADS_LIMIT + '자</span>' + copyBtn('o-t' + i) + '</div>' + textBlock('o-t' + i, p) + '</div>').join('');
+    } else if (tab === 'restyle') {
+      body = restyleHtml(entry);
     } else if (tab === 'long') {
       body = '<p class="small muted">하루 한 권만으로는 짧을 수 있어요. 목록 화면의 "오늘 기록으로 롱폼 대본 만들기"는 오늘 읽은 책을 모두 묶어줘요.</p>' +
         scriptHtml(F.longScript(book, entry, opts), 'o-long');
@@ -830,6 +928,7 @@
     app.querySelectorAll('[data-tab]').forEach(el => el.addEventListener('click', () => { view.tab = el.dataset.tab; render(); }));
     app.querySelectorAll('[data-qpick]').forEach(el => el.addEventListener('click', () => { view.qi = Number(el.dataset.qpick); render(); }));
     if (entry && F.hasContent(entry)) bindProof(book, entry);
+    if (tab === 'restyle' && entry && F.hasContent(entry)) bindRestyle(book, entry);
     bindCopy();
   }
 

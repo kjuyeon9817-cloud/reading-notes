@@ -185,6 +185,77 @@
     return { scenes: scenes, totalSec: total, note: note };
   }
 
+  // ---------- 어투·목표 독자 맞춤 재구성 (AI에게 줄 지시) ----------
+  const RS_PLATFORMS = { threads: { name: 'Threads', limit: 500 }, x: { name: 'X(트위터)', limit: 280 } };
+  const RS_FORMATS = { single: { label: '단일 포스트', count: '1개' }, short: { label: '숏 스레드', count: '4~5개' }, long: { label: '롱 스레드', count: '7~9개' } };
+  const RS_TONES = {
+    viral: { label: '바이럴 후킹', prompt: '바이럴 후킹형 — 강렬한 호기심 유발, 짧고 임팩트 있는 문장, 반전과 넘버링 활용' },
+    friendly: { label: '친근·유쾌', prompt: '친근·유쾌형 — 친구에게 말하듯 다정하고 편한 말투, 가벼운 유머, 공감 표현' },
+    expert: { label: '전문가', prompt: '전문가형 — 근거를 앞세운 신뢰감 있는 말투, 정확한 용어, 군더더기 없는 설명' },
+    direct: { label: '직설', prompt: '직설형 — 돌려 말하지 않는 단호한 문장, 핵심만 짧게, 결론부터' }
+  };
+
+  function recordText(book, entry) {
+    const lines = ['책: ' + t(book.title) + (has(book.author) ? ' (' + t(book.author) + ')' : '') + ' · ' + dayNumber(book, entry.date) + '일째 읽는 중'];
+    if (has(book.whyReading)) lines.push('', '[이 책을 읽게 된 이유]', t(book.whyReading));
+    const prev = previousChecks(book, entry);
+    if (prev) {
+      lines.push('', '[어제 다짐한 것과 실천 결과]');
+      prev.items.forEach(a => lines.push('- ' + t(a.text) + ' → ' + (a.practiced ? '실천함. 달라진 점: ' + (t(a.result) || '(안 적음)') : '못 함. 이유: ' + (t(a.reason) || '(안 적음)'))));
+    }
+    const qs = quotes(entry);
+    if (qs.length) {
+      lines.push('', '[책에서 옮긴 문장과 고른 이유]');
+      qs.forEach((q, i) => lines.push((i + 1) + '. "' + t(q.text) + '"' + (has(q.page) ? ' (' + t(q.page) + ')' : ''), '   고른 이유: ' + (t(q.reason) || '(안 적음)')));
+    }
+    if (has(entry.summary)) lines.push('', '[오늘 읽은 내용 정리]', t(entry.summary));
+    const as = apps(entry);
+    if (as.length) { lines.push('', '[내 삶에 적용할 것]'); as.forEach((a, i) => lines.push((i + 1) + '. ' + t(a.text))); }
+    return lines.join('\n');
+  }
+
+  function restyleMessages(book, entry, o) {
+    const p = RS_PLATFORMS[o.platform] || RS_PLATFORMS.threads;
+    const f = RS_FORMATS[o.format] || RS_FORMATS.short;
+    const tone = RS_TONES[o.tone] || RS_TONES.viral;
+    const system = [
+      '당신은 한 사람의 독서 기록을 ' + p.name + ' 글로 다시 구성하는 편집자입니다.',
+      '글쓴이는 AI가 대신 생각해 주는 글이 아니라, 자기가 직접 읽고 느낀 것을 사람 대 사람으로 나누고 싶어 합니다.',
+      '',
+      '반드시 지킬 것:',
+      '- 재료는 아래 독서 기록뿐입니다. 기록에 없는 경험, 사례, 숫자, 통계, 인용을 지어내지 않습니다.',
+      '- 글쓴이의 생각, 느낌, 실천 결과가 글의 중심입니다. 일반론으로 바꾸지 않습니다.',
+      '- 책에서 옮긴 문장을 쓸 때는 한 글자도 바꾸지 않고 따옴표로 그대로 씁니다.',
+      '- 글쓴이 시점(1인칭 "나")으로 씁니다.',
+      '',
+      '바꿔도 되는 것:',
+      '- 어투: ' + tone.prompt,
+      '- 목표 독자에게 닿도록 순서, 강조점, 첫 문장, 말 거는 방식을 다시 구성합니다.',
+      '',
+      '형식:',
+      '- 포스트 하나당 ' + p.limit + '자를 넘기지 않습니다.',
+      '- 1~2문장마다 줄을 바꾸고 빈 줄로 나눕니다.',
+      '- "~에 대해 알아보겠습니다" 같은 AI 말투를 쓰지 않습니다.',
+      '- 해시태그는 마지막 포스트에만 최대 2개.',
+      '- 포스트 개수: ' + f.count,
+      '- 각 포스트 앞에 ###POST### 를 한 줄로 쓰고, 번호(1/5 등)는 붙이지 않습니다. 인사말이나 설명 없이 첫 ###POST### 부터 시작합니다.'
+    ].join('\n');
+    const user = '[목표 독자]\n' + (t(o.target) || '(지정 안 함)') + '\n\n[독서 기록]\n' + recordText(book, entry) +
+      '\n\n이 기록으로 목표 독자에게 닿는 ' + p.name + ' 글을 써주세요.';
+    return [{ role: 'system', content: system }, { role: 'user', content: user }];
+  }
+
+  function parsePosts(text) {
+    const s = String(text || '').trim();
+    if (!s) return [];
+    let parts = s.split(/#{2,}\s*POST\s*#{2,}/i).map(x => x.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+      const numbered = s.split(/(?:^|\n)\s*(?:\[\d+\s*\/\s*\d+\]|\d+\s*\/\s*\d*|\d+\.)\s+/).map(x => x.trim()).filter(Boolean);
+      if (numbered.length > 1) parts = numbered;
+    }
+    return (parts.length ? parts : [s]);
+  }
+
   // 같은 날 읽은 여러 권을 하나의 롱폼으로 묶기: items = [{book, entry}]
   function dayLongScript(items, opts) {
     opts = opts || {};
@@ -210,6 +281,7 @@
 
   return {
     blog: blog, threads: threads, longScript: longScript, dayLongScript: dayLongScript, hasContent: hasContent, shortScript: shortScript,
-    scriptText: scriptText, dayNumber: dayNumber, THREADS_LIMIT: THREADS_LIMIT
+    scriptText: scriptText, dayNumber: dayNumber, THREADS_LIMIT: THREADS_LIMIT,
+    restyleMessages: restyleMessages, parsePosts: parsePosts, RS_PLATFORMS: RS_PLATFORMS, RS_FORMATS: RS_FORMATS, RS_TONES: RS_TONES
   };
 });
