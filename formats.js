@@ -173,7 +173,11 @@
   }
 
   function withTiming(scenes, minSec, maxSec) {
-    scenes.forEach(s => { s.sec = seconds(s.say) + 2; }); // 장면 전환 여유 2초
+    scenes.forEach(s => {
+      s.sec = seconds(s.say) + 2; // 장면 전환 여유 2초
+      // 화면 글을 그대로 읽는 장면이면 한 번만 보여준다
+      s.same = !!(s.say && s.screen && s.screen.includes(s.say));
+    });
     const total = scenes.reduce((n, s) => n + s.sec, 0);
     let note = '';
     if (total > maxSec) note = '예상 ' + total + '초로 목표(' + maxSec + '초)보다 길어요.';
@@ -198,8 +202,9 @@
   function scriptText(script) {
     return script.scenes.map(s =>
       '[' + s.part + '] 약 ' + s.sec + '초' +
-      (s.screen ? '\n화면: ' + s.screen.replace(/\n/g, ' / ') : '') +
-      (s.say ? '\n말하기: ' + s.say : '')
+      (s.same ? '\n화면에 띄우고 그대로 읽기: ' + s.screen.replace(/\n/g, ' / ') :
+        (s.screen ? '\n화면: ' + s.screen.replace(/\n/g, ' / ') : '') +
+        (s.say ? '\n말하기: ' + s.say : ''))
     ).join('\n\n');
   }
 

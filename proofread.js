@@ -1,5 +1,5 @@
 // 맞춤법·문맥 다듬기: 고칠 곳을 "제안"만 받고, 적용은 사람이 하나씩 고른다.
-import Anthropic from './vendor/anthropic-sdk.js';
+// Claude(Anthropic SDK) 또는 내 컴퓨터의 Ollama 중 하나를 쓴다.
 
 const SYSTEM = [
   '당신은 독서 기록의 맞춤법 교정자입니다.',
@@ -40,7 +40,15 @@ const SCHEMA = {
 };
 
 // fields: [{ id, label, text }]  →  [{ id, revised, reason }]
+function clean(fields, suggestions) {
+  const byId = Object.fromEntries(fields.map(f => [f.id, f.text]));
+  return (suggestions || []).filter(s => s && typeof s.revised === 'string' && byId[s.id] != null &&
+    s.revised.trim() && s.revised.trim() !== byId[s.id].trim())
+    .map(s => ({ id: s.id, revised: s.revised, reason: s.reason || '' }));
+}
+
 export async function proofread(apiKey, fields) {
+  const { default: Anthropic } = await import('./vendor/anthropic-sdk.js');
   const client = new Anthropic({ apiKey: apiKey, dangerouslyAllowBrowser: true });
   let res;
   try {
@@ -63,8 +71,51 @@ export async function proofread(apiKey, fields) {
   if (res.stop_reason === 'refusal') throw new Error('이 내용은 검토할 수 없다는 응답이 왔어요.');
   if (res.stop_reason === 'max_tokens') throw new Error('글이 너무 길어서 끝까지 검토하지 못했어요.');
   const text = res.content.filter(b => b.type === 'text').map(b => b.text).join('');
-  const known = new Set(fields.map(f => f.id));
-  const byId = Object.fromEntries(fields.map(f => [f.id, f.text]));
-  return (JSON.parse(text).suggestions || [])
-    .filter(s => known.has(s.id) && s.revised.trim() && s.revised.trim() !== byId[s.id].trim());
+  return clean(fields, JSON.parse(text).suggestions);
+}
+
+// Ollama: 내 컴퓨터에서 돌아가는 모델. 기록이 밖으로 나가지 않는다.
+function ollamaBase(url) { return (url || 'http://localhost:11434').replace(/\/+$/, ''); }
+
+function ollamaError(e) {
+  return new Error('Ollama에 연결하지 못했어요. Ollama가 켜져 있는지, 그리고 OLLAMA_ORIGINS 설정을 했는지 확인해 주세요. (' + (e.message || e) + ')');
+}
+
+export async function ollamaModels(url) {
+  let res;
+  try { res = await fetch(ollamaBase(url) + '/api/tags'); } catch (e) { throw ollamaError(e); }
+  if (!res.ok) throw new Error('Ollama 응답 오류 ' + res.status);
+  const j = await res.json();
+  return (j.models || []).map(m => m.name);
+}
+
+export async function proofreadOllama(url, model, fields) {
+  let res;
+  try {
+    res = await fetch(ollamaBase(url) + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        stream: false,
+        format: SCHEMA,
+        options: { temperature: 0 },
+        messages: [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: JSON.stringify({ fields: fields }) }
+        ]
+      })
+    });
+  } catch (e) { throw ollamaError(e); }
+  if (!res.ok) {
+    let msg = '';
+    try { msg = (await res.json()).error || ''; } catch (e) { /* ignore */ }
+    if (res.status === 404) throw new Error('"' + model + '" 모델을 찾지 못했어요. 설정에서 모델 목록을 다시 불러와 골라주세요.');
+    throw new Error('Ollama 응답 오류 ' + res.status + ' ' + msg);
+  }
+  const j = await res.json();
+  let parsed;
+  try { parsed = JSON.parse(j.message && j.message.content); }
+  catch (e) { throw new Error('모델이 형식에 맞지 않는 답을 줬어요. 다시 살펴보기를 눌러주세요.'); }
+  return clean(fields, parsed.suggestions);
 }

@@ -631,8 +631,9 @@
       '<div class="actions">' + copyBtn(idPrefix + '-all', '대본 전체 복사') + '</div>' +
       '<div hidden id="' + idPrefix + '-all" data-raw="' + esc(F.scriptText(script)) + '"></div>' +
       script.scenes.map(s => '<div class="scene"><div class="small muted">' + esc(s.part) + ' · 약 ' + s.sec + '초</div>' +
-        (s.screen ? '<div class="scene-screen">' + esc(s.screen) + '</div>' : '') +
-        (s.say ? '<div class="scene-say">🎙 ' + esc(s.say) + '</div>' : '') + '</div>').join('');
+        (s.same ? '<div class="scene-screen">📺🎙 ' + esc(s.screen) + '</div><div class="small muted">화면에 띄우고 그대로 읽어요</div>' :
+          (s.screen ? '<div class="scene-screen">📺 ' + esc(s.screen) + '</div>' : '') +
+          (s.say ? '<div class="scene-say">🎙 ' + esc(s.say) + '</div>' : '')) + '</div>').join('');
   }
 
   // ---------- 맞춤법·문맥 다듬기 (Claude) ----------
@@ -673,12 +674,23 @@
     return { before, after };
   }
 
+  function llm() {
+    return Object.assign({ provider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: '' }, state.llm || {});
+  }
+  function llmReady() {
+    const l = llm();
+    return l.provider === 'ollama' ? !!l.ollamaModel : !!settings.claudeKey;
+  }
+
   function proofCardHtml() {
     const st = view.proof || {};
+    const l = llm();
     let h = '<div class="card"><h2>맞춤법·문맥 다듬기</h2>';
-    if (!settings.claudeKey) {
-      return h + '<p class="small muted">Claude가 오타와 어색한 곳을 찾아 제안해요. 쓰려면 <a href="#" data-go="settings">설정</a>에서 Claude API 키를 넣어주세요.</p></div>';
+    if (!llmReady()) {
+      return h + '<p class="small muted">AI가 오타와 어색한 곳을 찾아 제안해요. 쓰려면 <a href="#" data-go="settings">설정</a>에서 ' +
+        (l.provider === 'ollama' ? 'Ollama 모델을 골라주세요.' : 'Claude API 키를 넣어주세요.') + '</p></div>';
     }
+    h += '<p class="small muted">사용 중: ' + (l.provider === 'ollama' ? '내 컴퓨터 Ollama · ' + esc(l.ollamaModel) : 'Claude') + '</p>';
     h += '<p class="small muted">오타, 띄어쓰기, 뜻이 안 통하는 곳만 제안해요. 말투는 그대로 두고, 적용할지는 하나씩 직접 골라요. 책에서 옮긴 문장은 건드리지 않아요.</p>';
     if (st.loading) return h + '<p>살펴보는 중이에요…</p></div>';
     if (st.error) h += '<p class="notice">' + esc(st.error) + '</p>';
@@ -709,7 +721,11 @@
       view.proof = { loading: true }; render();
       try {
         const mod = await import('./proofread.js');
-        const res = await mod.proofread(settings.claudeKey, fields.map(f => ({ id: f.id, label: f.label, text: f.text })));
+        const l = llm();
+        const payload = fields.map(f => ({ id: f.id, label: f.label, text: f.text }));
+        const res = l.provider === 'ollama'
+          ? await mod.proofreadOllama(l.ollamaUrl, l.ollamaModel, payload)
+          : await mod.proofread(settings.claudeKey, payload);
         const byId = Object.fromEntries(fields.map(f => [f.id, f]));
         view.proof = { items: res.map(r => ({ id: r.id, label: byId[r.id].label, original: byId[r.id].text, revised: r.revised, reason: r.reason })) };
       } catch (e) {
@@ -884,11 +900,26 @@
       '<button class="btn ghost" id="s-sync" type="button">지금 동기화</button>' +
       (settings.token ? '<button class="btn danger" id="s-forget" type="button">이 기기에서 토큰 지우기</button>' : '') + '</div>' +
       '</div>' +
-      '<div class="card"><h2>맞춤법·문맥 다듬기 (Claude)</h2>' +
-      '<p class="small muted">포스팅용 글 화면에서 오타와 어색한 곳을 제안받을 때 써요. GitHub 토큰처럼 화면이 열려 있는 동안만 기억하고 저장하지 않아요. 쓴 만큼 Anthropic에 요금이 나가요.</p>' +
-      '<label for="s-claude">Claude API 키</label><input id="s-claude" type="password" autocomplete="off" placeholder="sk-ant-..." value="' + esc(settings.claudeKey) + '">' +
-      '<p class="small muted">키 만들기: platform.claude.com → API Keys → Create Key. 결제 수단 등록이 필요해요.</p>' +
-      '</div>' +
+      (() => {
+        const l = llm();
+        const isO = l.provider === 'ollama';
+        return '<div class="card"><h2>맞춤법·문맥 다듬기</h2>' +
+          '<p class="small muted">포스팅용 글 화면에서 오타와 어색한 곳을 제안받을 때 쓸 AI를 골라요.</p>' +
+          '<div class="seg" id="s-provider">' +
+          '<button type="button" data-v="ollama" class="' + (isO ? 'on' : '') + '">내 컴퓨터 (Ollama)</button>' +
+          '<button type="button" data-v="claude" class="' + (!isO ? 'on' : '') + '">Claude</button></div>' +
+          (isO
+            ? '<p class="small muted">기록이 내 컴퓨터 밖으로 나가지 않고 요금도 없어요. Ollama가 켜져 있는 컴퓨터에서만 돼요 (휴대폰에서는 안 돼요).</p>' +
+              '<label for="s-ourl">Ollama 주소</label><input id="s-ourl" type="text" autocapitalize="off" value="' + esc(l.ollamaUrl) + '">' +
+              '<label for="s-omodel">모델</label>' +
+              '<div class="date-bar"><input id="s-omodel" type="text" autocapitalize="off" style="flex:1" placeholder="예: gemma3n:e4b" value="' + esc(l.ollamaModel) + '">' +
+              '<button class="btn ghost small" type="button" id="s-olist">모델 목록 불러오기</button></div>' +
+              '<div id="s-olist-out" class="date-chips"></div>'
+            : '<p class="small muted">GitHub 토큰처럼 화면이 열려 있는 동안만 기억하고 저장하지 않아요. 쓴 만큼 Anthropic에 요금이 나가요.</p>' +
+              '<label for="s-claude">Claude API 키</label><input id="s-claude" type="password" autocomplete="off" placeholder="sk-ant-..." value="' + esc(settings.claudeKey) + '">' +
+              '<p class="small muted">키 만들기: platform.claude.com → API Keys → Create Key. 결제 수단 등록이 필요해요.</p>') +
+          '</div>';
+      })() +
       '<div class="card"><h2>내 인사말</h2>' +
       '<p class="small muted">포스팅용 글과 영상 대본의 시작과 끝에 그대로 들어가요. 비워두면 넣지 않아요. 이 기기에만 저장돼요.</p>' +
       '<label for="s-intro">영상 시작 인사</label><textarea id="s-intro" style="min-height:60px" placeholder="예: 오늘도 읽고 버틴 하루, 기록을 나눠요.">' + esc(state.intro) + '</textarea>' +
@@ -911,8 +942,33 @@
     ['intro', 'outro'].forEach(k => document.getElementById('s-' + k).addEventListener('input', e => {
       state[k] = e.target.value; persist();
     }));
-    document.getElementById('s-claude').addEventListener('input', e => {
+    const setLlm = patch => { state.llm = Object.assign(llm(), patch); persist(); };
+    app.querySelectorAll('#s-provider button').forEach(b => b.addEventListener('click', () => { setLlm({ provider: b.dataset.v }); renderSettings(); }));
+    const sc = document.getElementById('s-claude');
+    if (sc) sc.addEventListener('input', e => {
       settings.claudeKey = e.target.value.trim(); // 토큰처럼 화면이 열려 있는 동안만 기억한다
+    });
+    const ourl = document.getElementById('s-ourl');
+    if (ourl) ourl.addEventListener('input', e => setLlm({ ollamaUrl: e.target.value.trim() }));
+    const omodel = document.getElementById('s-omodel');
+    if (omodel) omodel.addEventListener('input', e => setLlm({ ollamaModel: e.target.value.trim() }));
+    const olist = document.getElementById('s-olist');
+    if (olist) olist.addEventListener('click', async () => {
+      const out = document.getElementById('s-olist-out');
+      out.innerHTML = '<span class="small muted">불러오는 중…</span>';
+      try {
+        const mod = await import('./proofread.js');
+        const names = await mod.ollamaModels(llm().ollamaUrl);
+        out.innerHTML = names.length
+          ? names.map(n => '<button type="button" class="chip' + (n === llm().ollamaModel ? ' on' : '') + '" data-model="' + esc(n) + '">' + esc(n) + '</button>').join('')
+          : '<span class="small muted">설치된 모델이 없어요. 터미널에서 ollama pull 로 받아주세요.</span>';
+        out.querySelectorAll('[data-model]').forEach(c => c.addEventListener('click', () => {
+          setLlm({ ollamaModel: c.dataset.model }); omodel.value = c.dataset.model;
+          out.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c));
+        }));
+      } catch (e) {
+        out.innerHTML = '<p class="notice">' + esc(e.message) + '</p>';
+      }
     });
     const forget = document.getElementById('s-forget');
     if (forget) forget.addEventListener('click', () => {
