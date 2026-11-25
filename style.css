@@ -161,3 +161,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .scene .out { margin-top: 6px; }
 .scene-screen { white-space: pre-wrap; font-weight: 700; margin: 4px 0; }
 .scene-say { white-space: pre-wrap; }
+
+.pf-before { color: var(--muted); margin-top: 4px; white-space: pre-wrap; }
+.pf-after { margin: 4px 0; white-space: pre-wrap; }
+.pf-before del { background: var(--warn-soft); color: var(--warn); }
+.pf-after ins { background: var(--ok-soft); color: var(--ok); text-decoration: none; font-weight: 700; }

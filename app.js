@@ -635,6 +635,103 @@
         (s.say ? '<div class="scene-say">🎙 ' + esc(s.say) + '</div>' : '') + '</div>').join('');
   }
 
+  // ---------- 맞춤법·문맥 다듬기 (Claude) ----------
+  // 다듬을 수 있는 칸 목록. 책에서 옮긴 문장(quote.text)은 원문이라 넣지 않는다.
+  function proofFields(book, entry) {
+    const f = [];
+    const add = (id, label, get, set) => { const v = get(); if (v && v.trim()) f.push({ id, label, text: v, set }); };
+    add('why', '읽게 된 이유', () => book.whyReading, v => { book.whyReading = v; });
+    (entry.quotes || []).forEach((q, i) => add('q' + i, '문장 ' + (i + 1) + '을 고른 이유', () => q.reason, v => { q.reason = v; }));
+    add('summary', '오늘 읽은 내용', () => entry.summary, v => { entry.summary = v; });
+    (entry.applications || []).forEach((a, i) => {
+      add('a' + i, '적용 ' + (i + 1), () => a.text, v => { a.text = v; });
+      add('a' + i + 'r', '적용 ' + (i + 1) + ' 실천 결과', () => a.result, v => { a.result = v; });
+      add('a' + i + 'n', '적용 ' + (i + 1) + ' 못 한 이유', () => a.reason, v => { a.reason = v; });
+    });
+    const prev = (book.entries || []).filter(e => e.date < entry.date && F.hasContent(e)).pop();
+    if (prev) (prev.applications || []).forEach((a, i) => {
+      add('p' + i + 'r', '어제 적용 ' + (i + 1) + ' 실천 결과', () => a.result, v => { a.result = v; });
+      add('p' + i + 'n', '어제 적용 ' + (i + 1) + ' 못 한 이유', () => a.reason, v => { a.reason = v; });
+    });
+    return f;
+  }
+
+  // 단어 단위로 바뀐 곳 표시
+  function diffHtml(a, b) {
+    const x = a.split(/(\s+)/), y = b.split(/(\s+)/);
+    const n = x.length, m = y.length;
+    if (n * m > 400000) return { before: esc(a), after: esc(b) };
+    const L = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+      L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    let i = 0, j = 0, before = '', after = '';
+    while (i < n || j < m) {
+      if (i < n && j < m && x[i] === y[j]) { before += esc(x[i]); after += esc(y[j]); i++; j++; }
+      else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) { after += '<ins>' + esc(y[j]) + '</ins>'; j++; }
+      else { before += '<del>' + esc(x[i]) + '</del>'; i++; }
+    }
+    return { before, after };
+  }
+
+  function proofCardHtml() {
+    const st = view.proof || {};
+    let h = '<div class="card"><h2>맞춤법·문맥 다듬기</h2>';
+    if (!settings.claudeKey) {
+      return h + '<p class="small muted">Claude가 오타와 어색한 곳을 찾아 제안해요. 쓰려면 <a href="#" data-go="settings">설정</a>에서 Claude API 키를 넣어주세요.</p></div>';
+    }
+    h += '<p class="small muted">오타, 띄어쓰기, 뜻이 안 통하는 곳만 제안해요. 말투는 그대로 두고, 적용할지는 하나씩 직접 골라요. 책에서 옮긴 문장은 건드리지 않아요.</p>';
+    if (st.loading) return h + '<p>살펴보는 중이에요…</p></div>';
+    if (st.error) h += '<p class="notice">' + esc(st.error) + '</p>';
+    if (st.items) {
+      if (!st.items.length) h += '<p class="notice">' + (st.applied ? '제안을 모두 처리했어요.' : '고칠 곳을 찾지 못했어요. 그대로 올려도 좋아요.') + '</p>';
+      else {
+        h += '<div class="actions" style="margin-bottom:8px"><button class="btn small" type="button" id="pf-all">모두 적용</button></div>';
+        st.items.forEach((s, k) => {
+          const d = diffHtml(s.original, s.revised);
+          h += '<div class="scene"><div class="small muted">' + esc(s.label) + '</div>' +
+            '<div class="pf-before">' + d.before + '</div>' +
+            '<div class="pf-after">' + d.after + '</div>' +
+            '<div class="small muted">' + esc(s.reason) + '</div>' +
+            '<div class="actions"><button class="btn small" type="button" data-pf-apply="' + k + '">적용</button>' +
+            '<button class="btn ghost small" type="button" data-pf-skip="' + k + '">그대로 두기</button></div></div>';
+        });
+      }
+    }
+    if (!st.items || !st.items.length) h += '<div class="actions"><button class="btn" type="button" id="pf-run">' + (st.items ? '다시 살펴보기' : '살펴보기') + '</button></div>';
+    return h + '</div>';
+  }
+
+  function bindProof(book, entry) {
+    const run = document.getElementById('pf-run');
+    if (run) run.addEventListener('click', async () => {
+      const fields = proofFields(book, entry);
+      if (!fields.length) { view.proof = { items: [], error: '살펴볼 글이 아직 없어요.' }; render(); return; }
+      view.proof = { loading: true }; render();
+      try {
+        const mod = await import('./proofread.js');
+        const res = await mod.proofread(settings.claudeKey, fields.map(f => ({ id: f.id, label: f.label, text: f.text })));
+        const byId = Object.fromEntries(fields.map(f => [f.id, f]));
+        view.proof = { items: res.map(r => ({ id: r.id, label: byId[r.id].label, original: byId[r.id].text, revised: r.revised, reason: r.reason })) };
+      } catch (e) {
+        view.proof = { error: e.message || String(e) };
+      }
+      if (view.name === 'export') render();
+    });
+    const applyOne = s => {
+      const f = proofFields(book, entry).find(x => x.id === s.id);
+      if (f && f.text === s.original) f.set(s.revised);
+    };
+    const done = () => { saveBook(book); view.proof.applied = true; render(); };
+    app.querySelectorAll('[data-pf-apply]').forEach(b => b.addEventListener('click', () => {
+      const k = Number(b.dataset.pfApply); applyOne(view.proof.items[k]); view.proof.items.splice(k, 1); done();
+    }));
+    app.querySelectorAll('[data-pf-skip]').forEach(b => b.addEventListener('click', () => {
+      view.proof.items.splice(Number(b.dataset.pfSkip), 1); view.proof.applied = true; render();
+    }));
+    const all = document.getElementById('pf-all');
+    if (all) all.addEventListener('click', () => { view.proof.items.forEach(applyOne); view.proof.items = []; done(); });
+  }
+
   function renderExport() {
     const book = books[view.bookId];
     if (!book || book.trashedAt) { go({ name: 'list' }); return; }
@@ -667,11 +764,13 @@
       '<button class="back" type="button" id="back">← ' + esc(book.title) + '</button>' +
       '<h1>포스팅용 글</h1>' +
       '<p class="muted small">' + fmtDate(view.date) + ' 기록 · 내가 쓴 문장은 그대로 두고 순서와 형식만 바꿨어요.</p>' +
+      (entry && F.hasContent(entry) ? proofCardHtml() : '') +
       '<div class="date-chips">' + tabs.map(([k, l]) => '<button type="button" class="chip' + (k === tab ? ' on' : '') + '" data-tab="' + k + '">' + l + '</button>').join('') + '</div>' +
       '<div class="card">' + body + '</div>';
     document.getElementById('back').addEventListener('click', () => go({ name: 'book', bookId: book.id, date: view.date }));
     app.querySelectorAll('[data-tab]').forEach(el => el.addEventListener('click', () => { view.tab = el.dataset.tab; render(); }));
     app.querySelectorAll('[data-qpick]').forEach(el => el.addEventListener('click', () => { view.qi = Number(el.dataset.qpick); render(); }));
+    if (entry && F.hasContent(entry)) bindProof(book, entry);
     bindCopy();
   }
 
@@ -758,7 +857,7 @@
       if (state.active !== previousState.active && previousState.active === '' && !current) delete state.profiles[''];
       if (!persist()) { state = previousState; return; }
       ({ books, sync } = state.profiles[key]);
-      settings = account;
+      settings = { ...account, claudeKey: settings.claudeKey };
       if (view.name === 'settings') renderSettings();
       else if (previousState.active !== state.active) go({ name: 'list' });
     } catch (e) {
@@ -785,6 +884,11 @@
       '<button class="btn ghost" id="s-sync" type="button">지금 동기화</button>' +
       (settings.token ? '<button class="btn danger" id="s-forget" type="button">이 기기에서 토큰 지우기</button>' : '') + '</div>' +
       '</div>' +
+      '<div class="card"><h2>맞춤법·문맥 다듬기 (Claude)</h2>' +
+      '<p class="small muted">포스팅용 글 화면에서 오타와 어색한 곳을 제안받을 때 써요. GitHub 토큰처럼 화면이 열려 있는 동안만 기억하고 저장하지 않아요. 쓴 만큼 Anthropic에 요금이 나가요.</p>' +
+      '<label for="s-claude">Claude API 키</label><input id="s-claude" type="password" autocomplete="off" placeholder="sk-ant-..." value="' + esc(settings.claudeKey) + '">' +
+      '<p class="small muted">키 만들기: platform.claude.com → API Keys → Create Key. 결제 수단 등록이 필요해요.</p>' +
+      '</div>' +
       '<div class="card"><h2>내 인사말</h2>' +
       '<p class="small muted">포스팅용 글과 영상 대본의 시작과 끝에 그대로 들어가요. 비워두면 넣지 않아요. 이 기기에만 저장돼요.</p>' +
       '<label for="s-intro">영상 시작 인사</label><textarea id="s-intro" style="min-height:60px" placeholder="예: 오늘도 읽고 버틴 하루, 기록을 나눠요.">' + esc(state.intro) + '</textarea>' +
@@ -807,6 +911,9 @@
     ['intro', 'outro'].forEach(k => document.getElementById('s-' + k).addEventListener('input', e => {
       state[k] = e.target.value; persist();
     }));
+    document.getElementById('s-claude').addEventListener('input', e => {
+      settings.claudeKey = e.target.value.trim(); // 토큰처럼 화면이 열려 있는 동안만 기억한다
+    });
     const forget = document.getElementById('s-forget');
     if (forget) forget.addEventListener('click', () => {
       if (syncing || configuring) { setStatus('동기화가 끝난 뒤 다시 눌러주세요.'); return; }
