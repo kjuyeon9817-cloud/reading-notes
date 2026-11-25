@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126c';
+  const APP_VERSION = '20261126d';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -739,14 +739,29 @@
     }
     if (!toc.length) return h + '<p class="small muted" style="margin:8px 0 0">목차를 적어두면 발췌한 문장이 어느 목차에 속하는지 고를 수 있어요.</p></div>';
     const shortDate = d => { const x = parseDay(d); return (x.getMonth() + 1) + '/' + x.getDate(); };
-    h += '<div class="toc-list">' + toc.map(t => {
-      const qs = tocQuotes(book, t.id), open = view.tocOpen === t.id;
-      return '<div class="toc-item lv' + t.level + (open ? ' open' : '') + '">' +
-        '<button type="button" class="toc-head" data-tocopen="' + esc(t.id) + '"' + (qs.length ? '' : ' disabled') + '>' +
-        '<span class="toc-title">' + esc(t.title) + '</span>' + (qs.length ? '<span class="toc-count">' + qs.length + '</span>' : '') + '</button>' +
-        (open ? '<div class="toc-quotes">' + qs.map(x => '<button type="button" class="toc-q" data-tocq="' + x.date + '|' + x.i + '">' +
-          '<span class="small muted">' + shortDate(x.date) + (x.q.page ? ' · ' + esc(x.q.page) : '') + '</span>' +
-          esc(x.q.text.trim().split('\n')[0].slice(0, 60)) + '</button>').join('') + '</div>' : '') + '</div>';
+    // 하위 목차는 바로 위 상위 목차에 묶는다. 상위를 누르면 펼쳐진다.
+    const groups = [];
+    toc.forEach(t => { if (t.level === 2 && groups.length) groups[groups.length - 1].kids.push(t); else groups.push({ item: t, kids: [] }); });
+    const exp = view.tocExp || {};
+    const quotesBox = qs => '<div class="toc-quotes">' + qs.map(x => '<button type="button" class="toc-q" data-tocq="' + x.date + '|' + x.i + '">' +
+      '<span class="small muted">' + shortDate(x.date) + (x.q.page ? ' · ' + esc(x.q.page) : '') + '</span>' +
+      esc(x.q.text.trim().split('\n')[0].slice(0, 60)) + '</button>').join('') + '</div>';
+    h += '<div class="toc-list">' + groups.map(g => {
+      const t = g.item, own = tocQuotes(book, t.id);
+      const total = own.length + g.kids.reduce((n, k) => n + tocQuotes(book, k.id).length, 0);
+      const isOpen = !!exp[t.id], hasKids = g.kids.length > 0;
+      const clickable = hasKids || own.length;
+      return '<div class="toc-item lv1' + (isOpen ? ' open' : '') + '">' +
+        '<button type="button" class="toc-head" data-tocexp="' + esc(t.id) + '"' + (clickable ? '' : ' disabled') + ' aria-expanded="' + isOpen + '">' +
+        '<span class="toc-chev">' + (hasKids ? (isOpen ? '▾' : '▸') : '') + '</span>' +
+        '<span class="toc-title">' + esc(t.title) + '</span>' + (total ? '<span class="toc-count">' + total + '</span>' : '') + '</button>' +
+        (isOpen ? (own.length ? quotesBox(own) : '') + g.kids.map(k => {
+          const kq = tocQuotes(book, k.id), kOpen = view.tocOpen === k.id;
+          return '<div class="toc-item lv2' + (kOpen ? ' open' : '') + '">' +
+            '<button type="button" class="toc-head" data-tocopen="' + esc(k.id) + '"' + (kq.length ? '' : ' disabled') + '>' +
+            '<span class="toc-title">' + esc(k.title) + '</span>' + (kq.length ? '<span class="toc-count">' + kq.length + '</span>' : '') + '</button>' +
+            (kOpen ? quotesBox(kq) : '') + '</div>';
+        }).join('') : '') + '</div>';
     }).join('') + '</div>';
     const linked = new Set(); (book.entries || []).forEach(e => (e.quotes || []).forEach(q => { if (tocItem(book, q.tocId)) linked.add(q); }));
     const all = (book.entries || []).reduce((n, e) => n + (e.quotes || []).filter(q => q.text && q.text.trim()).length, 0);
@@ -763,13 +778,18 @@
     });
     const cc = document.getElementById('toc-cancel');
     if (cc) cc.addEventListener('click', () => { view.tocEdit = false; render(); });
+    app.querySelectorAll('[data-tocexp]').forEach(el => el.addEventListener('click', () => {
+      const id = el.dataset.tocexp;
+      view.tocExp = Object.assign({}, view.tocExp); view.tocExp[id] = !view.tocExp[id];
+      render(); document.getElementById('toc').scrollIntoView({ block: 'start' });
+    }));
     app.querySelectorAll('[data-tocopen]').forEach(el => el.addEventListener('click', () => {
       view.tocOpen = view.tocOpen === el.dataset.tocopen ? null : el.dataset.tocopen; render();
       document.getElementById('toc').scrollIntoView({ block: 'start' });
     }));
     app.querySelectorAll('[data-tocq]').forEach(el => el.addEventListener('click', () => {
       const [d, i] = el.dataset.tocq.split('|');
-      go({ name: 'book', bookId: book.id, date: d, openQuote: Number(i), qpage: Math.floor(Number(i) / QUOTES_PER_PAGE), tocOpen: view.tocOpen });
+      go({ name: 'book', bookId: book.id, date: d, openQuote: Number(i), qpage: Math.floor(Number(i) / QUOTES_PER_PAGE), tocOpen: view.tocOpen, tocExp: view.tocExp });
       setTimeout(() => { const r = app.querySelector('[data-qopen="' + i + '"]'); if (r) r.scrollIntoView({ block: 'center' }); }, 0);
     }));
   }
