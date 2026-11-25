@@ -5,6 +5,9 @@
 (function () {
   'use strict';
 
+  // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
+  const APP_VERSION = '20261125b';
+
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
 
@@ -763,7 +766,7 @@
       if (!fields.length) { view.proof = { items: [], error: '살펴볼 글이 아직 없어요.' }; render(); return; }
       view.proof = { loading: true }; render();
       try {
-        const mod = await import('./proofread.js');
+        const mod = await import('./proofread.js?v=' + APP_VERSION);
         const l = llm();
         const payload = fields.map(f => ({ id: f.id, label: f.label, text: f.text }));
         const res = l.provider === 'lmstudio' ? await mod.proofreadLMStudio(l.lmUrl, l.lmModel, payload)
@@ -847,7 +850,7 @@
       view.rs = { busy: true, raw: '', reasoning: 0, ctrl };
       render();
       try {
-        const mod = await import('./proofread.js');
+        const mod = await import('./proofread.js?v=' + APP_VERSION);
         const cfg = Object.assign({}, llm(), { claudeKey: settings.claudeKey });
         const text = await mod.generateText(cfg, F.restyleMessages(book, entry, o), {
           temperature: 0.7, signal: ctrl.signal,
@@ -1107,7 +1110,7 @@
       const out = document.getElementById('s-olist-out');
       out.innerHTML = '<span class="small muted">불러오는 중…</span>';
       try {
-        const mod = await import('./proofread.js');
+        const mod = await import('./proofread.js?v=' + APP_VERSION);
         const cur = isLm() ? llm().lmModel : llm().ollamaModel;
         const names = isLm() ? await mod.lmstudioModels(llm().lmUrl) : await mod.ollamaModels(llm().ollamaUrl);
         out.innerHTML = names.length
