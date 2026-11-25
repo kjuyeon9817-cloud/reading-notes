@@ -59,6 +59,15 @@
 
 설정 → **Claude**에 API 키를 넣어요 (platform.claude.com에서 발급, 쓴 만큼 요금). 키는 GitHub 토큰처럼 화면이 열려 있는 동안만 기억하고 저장하지 않아요.
 
+## 스레드·X 글 생성기 (standalone.html)
+
+LM Studio 로컬 AI로 Threads·X 글을 만드는 별도 페이지예요. `standalone.html` 파일 하나를 브라우저로 열거나, GitHub Pages 주소 뒤에 `/standalone.html`을 붙여 열어요.
+
+- LM Studio → Developer 탭 → Start Server, 서버 설정에서 **Enable CORS** 켜기
+- 🧠 딥리서치(리서치 → 전략 설계 → 최종 작성, 3번 호출) / ⚡ 빠른 생성(1번 호출)
+- 추론 모델의 생각 과정은 본문에 넣지 않고 "생각하는 중" 표시로만 보여줘요.
+- 생성 기록 20개는 페이지를 닫으면 사라져요.
+
 ## 구성
 
 | 파일 | 내용 |
@@ -68,6 +77,7 @@
 | `app.js` | 기록, 저장, GitHub 동기화, 화면 |
 | `proofread.js` | 맞춤법·문맥 다듬기 요청 (공식 Anthropic SDK 사용) |
 | `vendor/anthropic-sdk.js` | 브라우저용으로 묶은 Anthropic SDK |
+| `standalone.html` | LM Studio 딥리서치 스레드·X 글 생성기 (독립 실행) |
 | `formats.js` | 기록 → 블로그·Threads·대본 변환 (브라우저와 Node 둘 다에서 사용) |
 
 기록 파일 형식(`books/<책id>.json`)은 이후 블로그·Threads·영상 대본 변환 단계에서 그대로 읽어서 씁니다.

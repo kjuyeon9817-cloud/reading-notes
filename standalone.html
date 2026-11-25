@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>로컬 AI 스레드 생성기</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Noto+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', '"Noto Sans KR"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    html, body { background: #080a10; color: #e5e7eb; }
+    body { font-family: "Plus Jakarta Sans", "Noto Sans KR", sans-serif; min-height: 100vh; }
+    .bg-glow::before, .bg-glow::after {
+      content: ""; position: fixed; z-index: 0; pointer-events: none; width: 60vw; height: 60vw; border-radius: 50%; filter: blur(40px);
+    }
+    .bg-glow::before { top: -20vw; left: -20vw; background: radial-gradient(circle, rgba(168,85,247,.22), transparent 65%); }
+    .bg-glow::after { bottom: -25vw; right: -20vw; background: radial-gradient(circle, rgba(6,182,212,.18), transparent 65%); }
+    .glass { background: rgba(255,255,255,.04); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,.08); }
+    .grad-text { background: linear-gradient(90deg, #a855f7, #ec4899, #06b6d4); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .grad-bg { background: linear-gradient(90deg, #a855f7, #ec4899, #06b6d4); }
+    .glow { box-shadow: 0 0 0 1px rgba(168,85,247,.6), 0 0 24px rgba(168,85,247,.35); }
+    .cursor::after { content: "▊"; margin-left: 2px; animation: blink 1s steps(1) infinite; color: #a855f7; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .thread-line { position: absolute; left: 27px; top: 60px; bottom: -16px; width: 2px; background: rgba(255,255,255,.12); }
+    textarea, input, select { color-scheme: dark; }
+    ::selection { background: rgba(168,85,247,.4); }
+  </style>
+</head>
+<body class="bg-glow">
+  <div id="root" class="relative z-10"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ---------- 설정값 ----------
+    const PLATFORMS = {
+      threads: { label: '🧵 Threads', limit: 500, name: 'Threads' },
+      x: { label: '𝕏 Twitter', limit: 280, name: 'X(트위터)' }
+    };
+    const FORMATS = {
+      single: { label: '단일 포스트', count: '1개', desc: '포스트 1개' },
+      short: { label: '숏 스레드', count: '4~5개', desc: '포스트 4~5개로 이어지는 스레드' },
+      long: { label: '롱 스레드', count: '7~9개', desc: '포스트 7~9개로 이어지는 스레드' }
+    };
+    const TONES = {
+      viral: { label: '바이럴 후킹', prompt: '바이럴 후킹형 — 강렬한 호기심 유발, 짧고 임팩트 있는 문장, 반전과 넘버링 활용' },
+      friendly: { label: '친근·유쾌', prompt: '친근·유쾌형 — 친구에게 말하듯 편한 반말/존댓말 섞지 않은 다정한 말투, 가벼운 유머, 공감 표현' },
+      expert: { label: '전문가', prompt: '전문가형 — 근거와 데이터를 앞세운 신뢰감 있는 말투, 정확한 용어, 군더더기 없는 설명' },
+      direct: { label: '직설', prompt: '직설형 — 돌려 말하지 않는 단호한 문장, 핵심만 짧게, 결론부터 말하기' }
+    };
+    const STAGES = [
+      { key: 'research', label: '딥리서치', busy: '리서치 중...', icon: 'fa-magnifying-glass-chart' },
+      { key: 'plan', label: '전략 설계', busy: '전략 설계 중...', icon: 'fa-diagram-project' },
+      { key: 'write', label: '최종 작성', busy: '글 작성 중...', icon: 'fa-pen-nib' }
+    ];
+
+    // ---------- LM Studio 통신 ----------
+    function cleanBase(u) { return (u || '').trim().replace(/\/+$/, ''); }
+
+    // <think>…</think> 제거, 닫히지 않은 <think> 이후도 제거
+    function stripThink(s) {
+      return String(s || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '');
+    }
+
+    async function fetchModels(baseUrl) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      try {
+        const res = await fetch(cleanBase(baseUrl) + '/v1/models', { signal: ctrl.signal });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        return (j.data || []).map(m => m.id).filter(id => !/embed/i.test(id));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // OpenAI 호환 스트리밍. reasoning_content는 본문에 넣지 않고 onReasoning으로만 알린다.
+    async function streamChat({ baseUrl, model, messages, temperature, maxTokens, signal, onContent, onReasoning }) {
+      const res = await fetch(cleanBase(baseUrl) + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, stream: true }),
+        signal
+      });
+      if (!res.ok || !res.body) {
+        let msg = 'HTTP ' + res.status;
+        try { const j = await res.json(); msg += ' ' + ((j.error && (j.error.message || j.error)) || ''); } catch (e) { /* ignore */ }
+        throw new Error(msg);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', content = '', reasoningLen = 0, done = false;
+      while (!done) {
+        const { value, done: rdDone } = await reader.read();
+        if (rdDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') { done = true; break; }
+          let j;
+          try { j = JSON.parse(payload); } catch (e) { continue; }
+          const delta = (j.choices && j.choices[0] && j.choices[0].delta) || {};
+          const r = delta.reasoning_content || delta.reasoning;
+          if (r) { reasoningLen += r.length; onReasoning && onReasoning(reasoningLen); }
+          if (delta.content) { content += delta.content; onContent && onContent(stripThink(content)); }
+        }
+      }
+      return stripThink(content).trim();
+    }
+
+    // ---------- 프롬프트 ----------
+    function brief(f) {
+      const p = PLATFORMS[f.platform], fm = FORMATS[f.format];
+      return [
+        '주제: ' + f.topic,
+        '타깃 독자: ' + (f.audience || '(지정 안 함 — 주제에 맞게 추론)'),
+        '강조 메시지/추가 메모: ' + (f.memo || '(없음)'),
+        '플랫폼: ' + p.name + ' (포스트당 최대 ' + p.limit + '자)',
+        '글 형태: ' + fm.desc,
+        '어투: ' + TONES[f.tone].prompt
+      ].join('\n');
+    }
+
+    function researchMessages(f) {
+      return [
+        { role: 'system', content: '당신은 소셜미디어 콘텐츠 전략 리서처입니다. 글을 쓰지 말고 리서치만 하세요. 반드시 한국어로, 아래 마크다운 헤딩 형식을 그대로 지켜 답하세요.' },
+        { role: 'user', content: brief(f) + '\n\n다음 형식으로 리서치 보고서를 작성하세요.\n\n## 타깃 독자 분석\n## 핵심 페인포인트\n(정확히 3가지)\n## 핵심 인사이트\n(구체적 숫자·사례를 포함해 5가지)\n## 흔한 오해\n## 후킹 앵글 후보\n(첫 문장 후보 3가지)' }
+      ];
+    }
+    function planMessages(f, research) {
+      return [
+        { role: 'system', content: '당신은 스레드 구성 전문가입니다. 글은 쓰지 말고 설계도만 작성하세요. 반드시 한국어로, 아래 마크다운 헤딩 형식을 지키세요.' },
+        { role: 'user', content: brief(f) + '\n\n[리서치 보고서]\n' + research + '\n\n다음 형식으로 설계도를 작성하세요.\n\n## 선택한 후킹 앵글\n(1개 + 고른 이유)\n## 스레드 구조\n(N번 포스트: 역할 — 내용 요약. ' + FORMATS[f.format].count + ' 분량. 마지막 포스트는 반드시 요약 + CTA)\n## 관통하는 한 문장' }
+      ];
+    }
+    function writerSystem(f) {
+      const p = PLATFORMS[f.platform];
+      return [
+        '당신은 팔로워 수십만 명을 가진 한국어 ' + p.name + ' 크리에이터입니다.',
+        '작성 원칙:',
+        '- 포스트 하나당 ' + p.limit + '자 제한을 반드시 지킨다.',
+        '- 첫 문장으로 스크롤을 멈추게 한다.',
+        '- 1~2문장 단위로 끊고 빈 줄로 구분한다 (모바일 가독성).',
+        '- "~에 대해 알아보겠습니다" 같은 AI 티 나는 표현을 쓰지 않는다.',
+        '- 구체적인 숫자와 사례를 우선한다.',
+        '- 해시태그는 마지막 포스트에만, 최대 2개.',
+        '- 어투: ' + TONES[f.tone].prompt,
+        '',
+        '출력 형식 (반드시 지킬 것):',
+        '- 각 포스트 앞에 ###POST### 구분선을 한 줄로 쓴다.',
+        '- 포스트 번호(예: 1/5)는 붙이지 않고 본문만 쓴다.',
+        '- 인사말이나 설명 없이 바로 첫 ###POST### 구분선부터 시작한다.',
+        '- 포스트 개수: ' + FORMATS[f.format].count
+      ].join('\n');
+    }
+    function writeMessages(f, research, plan) {
+      return [
+        { role: 'system', content: writerSystem(f) },
+        { role: 'user', content: brief(f) + '\n\n[리서치 보고서]\n' + research + '\n\n[설계도]\n' + plan + '\n\n위 설계도대로 최종 글을 작성하세요.' }
+      ];
+    }
+    function quickMessages(f) {
+      return [
+        { role: 'system', content: writerSystem(f) },
+        { role: 'user', content: brief(f) + '\n\n위 조건으로 바로 최종 글을 작성하세요.' }
+      ];
+    }
+
+    // ---------- 결과 파싱 ----------
+    function parsePosts(text) {
+      const t = String(text || '').trim();
+      if (!t) return [];
+      let parts = t.split(/#{2,}\s*POST\s*#{2,}/i).map(s => s.trim()).filter(Boolean);
+      if (parts.length <= 1) {
+        const numbered = t.split(/(?:^|\n)\s*(?:\[\d+\s*\/\s*\d+\]|\d+\s*\/\s*\d*|\d+\.)\s+/).map(s => s.trim()).filter(Boolean);
+        if (numbered.length > 1) parts = numbered;
+      }
+      if (!parts.length) parts = [t];
+      return parts.map((content, i) => ({ id: i + 1, content, charCount: Array.from(content).length }));
+    }
+
+    function celebrate() {
+      if (window.confetti) window.confetti({ particleCount: 70, spread: 65, origin: { y: 0.7 }, colors: ['#a855f7', '#ec4899', '#06b6d4'] });
+    }
+    async function copyText(text) {
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); ta.remove();
+      }
+      celebrate();
+    }
+
+    // ---------- 작은 컴포넌트 ----------
+    function Seg({ value, onChange, options, disabled }) {
+      return (
+        <div className="grid gap-1 p-1 rounded-xl bg-black/30 border border-white/10" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0,1fr))` }}>
+          {options.map(o => (
+            <button key={o.value} type="button" disabled={disabled} onClick={() => onChange(o.value)}
+              className={'px-2 py-2 rounded-lg text-sm font-semibold transition ' + (value === o.value ? 'grad-bg text-white shadow' : 'text-gray-400 hover:text-white')}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    function Label({ children }) { return <div className="text-xs font-semibold text-gray-400 mb-1.5 mt-4">{children}</div>; }
+
+    function CopyButton({ text, label = '복사', className = '' }) {
+      const [done, setDone] = useState(false);
+      return (
+        <button type="button" className={'text-xs px-2.5 py-1 rounded-lg border border-white/10 hover:border-white/30 transition ' + className}
+          onClick={async () => { await copyText(text); setDone(true); setTimeout(() => setDone(false), 1400); }}>
+          <i className={'fa-solid ' + (done ? 'fa-check text-emerald-400' : 'fa-copy')}></i> {done ? '복사됨!' : label}
+        </button>
+      );
+    }
+
+    // ---------- 앱 ----------
+    function App() {
+      const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:1234');
+      const [status, setStatus] = useState('checking'); // checking | online | offline
+      const [models, setModels] = useState([]);
+      const [model, setModel] = useState('');
+      const [showSettings, setShowSettings] = useState(false);
+      const [testMsg, setTestMsg] = useState('');
+
+      const [form, setForm] = useState({ mode: 'deep', platform: 'threads', format: 'short', topic: '', audience: '', memo: '', tone: 'viral' });
+      const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+      const [generating, setGenerating] = useState(false);
+      const [stage, setStage] = useState(-1);
+      const [stepState, setStepState] = useState(['idle', 'idle', 'idle']);
+      const [research, setResearch] = useState('');
+      const [plan, setPlan] = useState('');
+      const [finalRaw, setFinalRaw] = useState('');
+      const [reasoning, setReasoning] = useState(0);
+      const [panelOpen, setPanelOpen] = useState(false);
+      const [error, setError] = useState('');
+      const [history, setHistory] = useState([]);
+
+      const abortRef = useRef(null);
+      const generatingRef = useRef(false);
+      const panelRef = useRef(null);
+      const modelRef = useRef('');
+      useEffect(() => { modelRef.current = model; }, [model]);
+
+      const check = useCallback(async (url) => {
+        setStatus(s => (s === 'online' ? s : 'checking'));
+        try {
+          const list = await fetchModels(url);
+          setModels(list);
+          setStatus('online');
+          if (!list.includes(modelRef.current)) setModel(list[0] || '');
+          return { ok: true, count: list.length };
+        } catch (e) {
+          setStatus('offline');
+          return { ok: false, error: e.name === 'AbortError' ? '4초 안에 응답이 없어요' : e.message };
+        }
+      }, []);
+
+      useEffect(() => {
+        check(baseUrl);
+        const t = setInterval(() => { if (!generatingRef.current) check(baseUrl); }, 15000);
+        return () => clearInterval(t);
+      }, [baseUrl, check]);
+
+      useEffect(() => {
+        if (panelRef.current) panelRef.current.scrollTop = panelRef.current.scrollHeight;
+      }, [research, plan]);
+
+      const posts = parsePosts(finalRaw);
+      const limit = PLATFORMS[form.platform].limit;
+
+      async function runStage(i, messages, temperature, maxTokens, onText) {
+        setStage(i);
+        setReasoning(0);
+        setStepState(s => s.map((v, k) => (k === i ? 'active' : v)));
+        const text = await streamChat({
+          baseUrl, model, messages, temperature, maxTokens,
+          signal: abortRef.current.signal,
+          onContent: onText,
+          onReasoning: n => setReasoning(n)
+        });
+        onText(text);
+        setStepState(s => s.map((v, k) => (k === i ? 'done' : v)));
+        return text;
+      }
+
+      async function generate() {
+        if (!form.topic.trim()) { setError('주제를 입력해 주세요.'); return; }
+        if (status !== 'online' || !model) { setError('LM Studio에 연결되어 있지 않아요. 오른쪽 위 설정에서 연결을 확인해 주세요.'); return; }
+        setError('');
+        setResearch(''); setPlan(''); setFinalRaw('');
+        const deep = form.mode === 'deep';
+        setStepState(deep ? ['idle', 'idle', 'idle'] : ['skip', 'skip', 'idle']);
+        setPanelOpen(deep);
+        setGenerating(true); generatingRef.current = true;
+        abortRef.current = new AbortController();
+        const snapshot = { ...form };
+        let r = '', p = '', w = '';
+        try {
+          if (deep) {
+            r = await runStage(0, researchMessages(snapshot), 0.4, 4096, setResearch);
+            p = await runStage(1, planMessages(snapshot, r), 0.5, 3072, setPlan);
+            w = await runStage(2, writeMessages(snapshot, r, p), 0.75, 4096, setFinalRaw);
+          } else {
+            w = await runStage(2, quickMessages(snapshot), 0.75, 4096, setFinalRaw);
+          }
+          const parsed = parsePosts(w);
+          setHistory(h => [{ id: Date.now(), time: new Date(), form: snapshot, raw: w, research: r, plan: p }, ...h].slice(0, 20));
+          setPanelOpen(false);
+          if (parsed.length) celebrate();
+        } catch (e) {
+          setError(e.name === 'AbortError' ? '생성을 중단했어요.' : '생성 실패: ' + e.message);
+          setStepState(s => s.map(v => (v === 'active' ? 'idle' : v)));
+        } finally {
+          setGenerating(false); generatingRef.current = false; setStage(-1);
+        }
+      }
+
+      function stop() { if (abortRef.current) abortRef.current.abort(); }
+
+      function restore(h) {
+        setForm(h.form); setResearch(h.research); setPlan(h.plan); setFinalRaw(h.raw);
+        setStepState(h.form.mode === 'deep' ? ['done', 'done', 'done'] : ['skip', 'skip', 'done']);
+        setPanelOpen(false); setError('');
+      }
+
+      async function testConnection() {
+        setTestMsg('확인 중...');
+        const r = await check(baseUrl);
+        setTestMsg(r.ok ? `연결됨 · 모델 ${r.count}개` : `연결 실패 (${r.error})`);
+      }
+
+      const statusBadge = {
+        online: <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-400/30"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>연결됨</span>,
+        offline: <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-red-500/15 text-red-300 border border-red-400/30"><span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>오프라인</span>,
+        checking: <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-white/5 text-gray-300 border border-white/10"><i className="fa-solid fa-spinner fa-spin"></i>확인 중</span>
+      }[status];
+
+      const stageBusy = stage >= 0 ? STAGES[stage].busy : '';
+
+      return (
+        <div className="max-w-7xl mx-auto px-4 py-5">
+          {/* 헤더 */}
+          <header className="glass rounded-2xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl grad-bg flex items-center justify-center text-white"><i className="fa-solid fa-wand-magic-sparkles"></i></div>
+              <div>
+                <div className="font-extrabold text-lg leading-tight"><span className="grad-text">딥리서치</span> 스레드 생성기</div>
+                <div className="text-xs text-gray-400">LM Studio 로컬 AI · Threads & X</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {statusBadge}
+              <select value={model} onChange={e => setModel(e.target.value)} disabled={!models.length || generating}
+                className="bg-black/40 border border-white/10 rounded-lg text-sm px-2 py-1.5 max-w-[14rem] font-mono" aria-label="모델 선택">
+                {!models.length && <option value="">모델 없음</option>}
+                {models.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <button type="button" onClick={() => setShowSettings(s => !s)} className="w-9 h-9 rounded-lg border border-white/10 hover:border-white/30" aria-label="설정">
+                <i className="fa-solid fa-gear"></i>
+              </button>
+            </div>
+          </header>
+
+          {showSettings && (
+            <div className="glass rounded-2xl p-4 mt-3">
+              <div className="text-sm font-semibold mb-2">LM Studio 서버</div>
+              <div className="flex gap-2 flex-wrap">
+                <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="flex-1 min-w-[12rem] bg-black/40 border border-white/10 rounded-lg px-3 py-2 font-mono text-sm" />
+                <button type="button" onClick={testConnection} className="px-3 py-2 rounded-lg grad-bg text-white text-sm font-semibold">연결 테스트</button>
+              </div>
+              {testMsg && <div className="text-xs mt-2 text-gray-300">{testMsg}</div>}
+              {status === 'offline' && (
+                <div className="text-xs mt-2 text-amber-300">LM Studio 앱에서 Developer 탭 → Start Server 확인, 서버 설정의 Enable CORS 켜기</div>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-3 rounded-xl border border-red-400/40 bg-red-500/15 text-red-200 px-4 py-3 flex items-start gap-3" role="alert">
+              <i className="fa-solid fa-triangle-exclamation mt-0.5"></i>
+              <div className="flex-1 text-sm">{error}</div>
+              <button type="button" onClick={() => setError('')} aria-label="닫기"><i className="fa-solid fa-xmark"></i></button>
+            </div>
+          )}
+
+          <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 mt-4">
+            {/* 입력 폼 */}
+            <section className="lg:col-span-4 space-y-4">
+              <div className="glass rounded-2xl p-4">
+                <Label>생성 모드</Label>
+                <Seg value={form.mode} onChange={v => set('mode', v)} disabled={generating}
+                  options={[{ value: 'deep', label: '🧠 딥리서치(3단계)' }, { value: 'quick', label: '⚡ 빠른 생성(1단계)' }]} />
+                <Label>플랫폼</Label>
+                <Seg value={form.platform} onChange={v => set('platform', v)} disabled={generating}
+                  options={Object.entries(PLATFORMS).map(([k, p]) => ({ value: k, label: `${p.label} (${p.limit}자)` }))} />
+                <Label>글 형태</Label>
+                <Seg value={form.format} onChange={v => set('format', v)} disabled={generating}
+                  options={Object.entries(FORMATS).map(([k, f]) => ({ value: k, label: `${f.label} (${f.count})` }))} />
+
+                <Label>주제 <span className="text-pink-400">*</span></Label>
+                <textarea value={form.topic} onChange={e => set('topic', e.target.value)} rows={3} disabled={generating}
+                  placeholder="예: 하루 3권 병행 독서로 생각하는 힘 되찾기"
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                <Label>타깃 독자 (선택)</Label>
+                <input value={form.audience} onChange={e => set('audience', e.target.value)} disabled={generating}
+                  placeholder="예: AI 때문에 생각이 줄어든 것 같은 20~30대"
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                <Label>강조 메시지 / 추가 메모 (선택)</Label>
+                <textarea value={form.memo} onChange={e => set('memo', e.target.value)} rows={3} disabled={generating}
+                  placeholder="꼭 들어갔으면 하는 내용, 내 경험 등"
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                <Label>어투</Label>
+                <select value={form.tone} onChange={e => set('tone', e.target.value)} disabled={generating}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm">
+                  {Object.entries(TONES).map(([k, t]) => <option key={k} value={k}>{t.label}</option>)}
+                </select>
+
+                <div className="flex gap-2 mt-5">
+                  <button type="button" onClick={generate} disabled={generating}
+                    className={'flex-1 py-3 rounded-xl font-bold text-white grad-bg transition ' + (generating ? 'opacity-80 animate-pulse' : 'hover:brightness-110')}>
+                    {generating ? <span><i className="fa-solid fa-spinner fa-spin mr-2"></i>{stageBusy}</span>
+                      : <span><i className="fa-solid fa-bolt mr-2"></i>{form.mode === 'deep' ? '딥리서치로 생성' : '빠르게 생성'}</span>}
+                  </button>
+                  {generating && (
+                    <button type="button" onClick={stop} className="px-4 rounded-xl border border-red-400/50 text-red-300 hover:bg-red-500/10" aria-label="중단">⏹</button>
+                  )}
+                </div>
+              </div>
+
+              {history.length > 0 && (
+                <div className="glass rounded-2xl p-4">
+                  <div className="text-sm font-semibold mb-2"><i className="fa-solid fa-clock-rotate-left mr-2 text-gray-400"></i>생성 기록</div>
+                  <ul className="space-y-1">
+                    {history.map(h => (
+                      <li key={h.id}>
+                        <button type="button" onClick={() => restore(h)} disabled={generating}
+                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-white/5 text-sm flex gap-2 items-center">
+                          <span className="text-xs text-gray-500 font-mono">{h.time.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span className="truncate flex-1">{h.form.topic}</span>
+                          <span className="text-xs text-gray-500">{h.form.platform === 'x' ? '𝕏' : '🧵'}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+
+            {/* 결과 */}
+            <section className="lg:col-span-8 space-y-4">
+              <div className="grid grid-cols-3 gap-2">
+                {STAGES.map((s, i) => {
+                  const st = stepState[i];
+                  const cls = st === 'active' ? 'glow animate-pulse text-white'
+                    : st === 'done' ? 'border-emerald-400/40 text-emerald-300'
+                    : 'opacity-40';
+                  return (
+                    <div key={s.key} className={'glass rounded-xl px-3 py-3 text-center ' + cls}>
+                      <div className="text-lg"><i className={'fa-solid ' + (st === 'done' ? 'fa-circle-check' : s.icon)}></i></div>
+                      <div className="text-xs sm:text-sm font-semibold mt-1">{i + 1}. {s.label}</div>
+                      <div className="text-[11px] text-gray-400 mt-0.5">{st === 'active' ? '진행 중' : st === 'done' ? '완료' : st === 'skip' ? '건너뜀' : '대기'}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {generating && reasoning > 0 && (
+                <div className="glass rounded-xl px-4 py-2 text-sm text-purple-200">
+                  🧠 모델이 깊게 생각하는 중... <span className="font-mono">({reasoning.toLocaleString()}자 추론)</span>
+                </div>
+              )}
+
+              {(research || plan) && (
+                <div className="glass rounded-2xl">
+                  <button type="button" onClick={() => setPanelOpen(o => !o)} className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold">
+                    <span><i className="fa-solid fa-file-lines mr-2 text-purple-300"></i>리서치 보고서 & 설계도</span>
+                    <i className={'fa-solid ' + (panelOpen ? 'fa-chevron-up' : 'fa-chevron-down')}></i>
+                  </button>
+                  {panelOpen && (
+                    <div ref={panelRef} className="px-4 pb-4 max-h-96 overflow-auto text-sm leading-relaxed whitespace-pre-wrap font-mono text-gray-300">
+                      {research && <div><div className="text-purple-300 font-sans font-bold mb-1">📊 리서치 보고서</div><div className={stage === 0 ? 'cursor' : ''}>{research}</div></div>}
+                      {plan && <div className="mt-4"><div className="text-cyan-300 font-sans font-bold mb-1">🧩 설계도</div><div className={stage === 1 ? 'cursor' : ''}>{plan}</div></div>}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {posts.length > 0 ? (
+                <div className="glass rounded-2xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold">미리보기 · {posts.length}개 포스트</div>
+                    {!generating && <CopyButton text={posts.map(p => p.content).join('\n\n\n')} label="전체 복사" />}
+                  </div>
+                  <div className="space-y-4">
+                    {posts.map((p, i) => {
+                      const over = p.charCount > limit;
+                      const last = i === posts.length - 1;
+                      return (
+                        <div key={i} className="relative">
+                          {!last && <div className="thread-line"></div>}
+                          <div className="rounded-xl bg-black/30 border border-white/10 p-4 flex gap-3">
+                            <div className="w-10 h-10 shrink-0 rounded-full grad-bg flex items-center justify-center font-bold text-white">나</div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 text-sm">
+                                <span className="font-bold">나의 계정</span>
+                                <span className="text-gray-500">@me</span>
+                                <span className="ml-auto text-xs text-gray-500 font-mono">{i + 1}/{posts.length}</span>
+                              </div>
+                              <div className={'mt-2 whitespace-pre-wrap text-[15px] leading-relaxed ' + (generating && stage === 2 && last ? 'cursor' : '')}>{p.content}</div>
+                              <div className="flex items-center gap-2 mt-3">
+                                <span className={'text-xs font-mono px-2 py-0.5 rounded-full border ' + (over ? 'border-orange-400/60 text-orange-300 bg-orange-500/10' : 'border-white/10 text-gray-400')}>
+                                  {over && <i className="fa-solid fa-triangle-exclamation mr-1"></i>}{p.charCount}/{limit}자
+                                </span>
+                                {!generating && <CopyButton text={p.content} className="ml-auto" />}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="glass rounded-2xl p-10 text-center text-gray-400">
+                  {generating ? <span><i className="fa-solid fa-spinner fa-spin mr-2"></i>{stageBusy}</span>
+                    : <span><i className="fa-solid fa-feather-pointed text-2xl block mb-2 grad-text"></i>왼쪽에 주제를 넣고 생성해 보세요.</span>}
+                </div>
+              )}
+            </section>
+          </main>
+
+          <footer className="text-center text-xs text-gray-500 mt-8 mb-4">
+            <i className="fa-solid fa-lock mr-1"></i>100% 로컬 실행 · 데이터는 외부로 전송되지 않습니다
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
