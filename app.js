@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261125e';
+  const APP_VERSION = '20261125f';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -395,8 +395,8 @@
   // 책마다 다른 표지색 (제목으로 정함): 노랑 계열 + 크림 + 먹색
   function coverTone(title) {
     const tones = [
-      ['#ffd84d', '#ffb020', '#17150f'], ['#fff1b8', '#ffd84d', '#17150f'], ['#2a261d', '#17150f', '#ffd84d'],
-      ['#ffe27a', '#f2a900', '#17150f'], ['#f6f1e4', '#e9dfc6', '#17150f'], ['#ffcc00', '#ff9f1c', '#17150f']
+      ['#fff3b0', '#ffd43b', '#4a3f2c'], ['#fffbea', '#fff0b3', '#4a3f2c'], ['#ffe680', '#ffc61a', '#4a3f2c'],
+      ['#fff8d6', '#ffe28a', '#4a3f2c'], ['#ffffff', '#fff3c4', '#4a3f2c'], ['#ffeb99', '#ffd43b', '#4a3f2c']
     ];
     let h = 0; for (const c of String(title || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
     const [a, b, ink] = tones[h % tones.length];
