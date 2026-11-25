@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126a';
+  const APP_VERSION = '20261126b';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -547,7 +547,8 @@
       '<p class="muted small">다음 날, 실천했는지 아래에서 체크해요.</p>' +
       '<div id="apps">' + entry.applications.map((a, i) => appHtml(a, i, isPast)).join('') + '</div>' +
       (entry.applications.length < 3 ? '<button class="btn ghost small" id="add-app" type="button">+ 적용 방법 추가</button>' : '') +
-      '</div>';
+      '</div>' +
+      draftHtml(entry);
 
     document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
     document.getElementById('to-export').addEventListener('click', () => go({ name: 'export', bookId: book.id, date: date, tab: 'blog' }));
@@ -610,10 +611,95 @@
       else bindEl(el, v => { live().applications[i][f] = v; });
     });
 
+    bindDraft(book, entry, live, commit);
+
     function bindText(id, set) { bindEl(document.getElementById(id), set); }
     function bindEl(el, set) {
       el.addEventListener('input', () => { set(el.value); commit(); });
     }
+  }
+
+  // ---------- 오늘의 원고 ----------
+  // 기록은 나를 위한 메모, 원고는 보는 사람을 위해 내가 다시 쓰는 3~5줄. AI는 쓰지 않고 짚어만 준다.
+  const DRAFT_FIELDS = [
+    ['hook', '첫 한 줄', '처음 2초에 멈추게 할 한 줄. 이 영상을 꼭 봐야 할 사람은 누구인가요?', '예: 요즘 글이 눈에 안 들어오는 사람이라면', 60],
+    ['story', '내 이야기', '왜 이 문장에서 멈췄나요? 떠오른 장면 하나를 구체적으로 적어요.', '예: 어제 ○○하다가 ○○했을 때, 이 문장이 생각났어요.', 90],
+    ['action', '하나의 실천', '보는 사람도 오늘 해볼 수 있을 만큼 작은 것 하나.', '예: 오늘 읽은 문장 하나만 손으로 적어보기', 60],
+    ['ask', '마지막 질문', '댓글로 답하고 싶어지는 질문으로 끝내요.', '예: 여러분은 요즘 어떤 문장에서 멈췄나요?', 60]
+  ];
+  function draftHtml(entry) {
+    const d = entry.draft || {};
+    const qs = (entry.quotes || []).map((q, i) => ({ q, i })).filter(x => x.q.text && x.q.text.trim());
+    const star = qs.find(x => x.q.id && x.q.id === d.starId);
+    const ref = (label, text) => text && text.trim() ? '<div class="draft-ref"><span>' + label + '</span>' + esc(text.trim()) + '</div>' : '';
+    const apps = (entry.applications || []).filter(a => a.text && a.text.trim()).map(a => a.text.trim()).join(' / ');
+    const sec = F.draftSeconds(entry);
+    const c = view.coach || {};
+    return '<div class="card draft-card" id="draft"><h2><span class="section-num">5</span>오늘의 원고 <span class="small muted" style="font-weight:500">영상·글에 쓸 내용</span></h2>' +
+      '<p class="small muted">위 기록은 나를 위한 메모예요. 여기에는 보는 사람을 위해 3~5줄로 다시 써요. 비워 두면 기록을 그대로 써요.</p>' +
+      '<label>⭐ 오늘의 문장 하나</label>' +
+      (qs.length ? '<div class="date-chips">' + qs.map(x => {
+        const first = x.q.text.trim().split('\n')[0];
+        return '<button type="button" class="chip' + (star && star.i === x.i ? ' on' : '') + '" data-star="' + x.i + '">' + (star && star.i === x.i ? '⭐ ' : '') + (x.i + 1) + '. ' + esc(first.length > 18 ? first.slice(0, 18) + '…' : first) + '</button>';
+      }).join('') + '</div>' : '<p class="small muted">위에서 발췌한 문장을 먼저 적어요.</p>') +
+      DRAFT_FIELDS.map(([k, label, help, ph, max]) => {
+        const v = d[k] || '';
+        return '<div class="draft-field"><label for="d-' + k + '">' + label + '</label><p class="small muted draft-help">' + help + '</p>' +
+          (k === 'story' && star ? ref('내가 적은 고른 이유', star.q.reason) : '') +
+          (k === 'action' ? ref('내 적용 방법', apps) : '') +
+          '<textarea id="d-' + k + '" data-draft="' + k + '" data-max="' + max + '" style="min-height:' + (k === 'story' ? 90 : 52) + 'px" placeholder="' + esc(ph) + '">' + esc(v) + '</textarea>' +
+          '<div class="small draft-count" id="dc-' + k + '">' + draftCount(v, max) + '</div></div>';
+      }).join('') +
+      '<p class="small" id="draft-sec"><strong>' + (sec ? '쇼츠 예상 약 ' + sec + '초' : '아직 원고가 없어요') + '</strong> <span class="muted">· 목표 30~50초</span></p>' +
+      '<div class="coach">' +
+      (llmReady() ? '<div class="actions"><button class="btn ghost small" type="button" id="coach-run"' + (c.busy ? ' disabled' : '') + '>' + (c.busy ? '보는 중…' : '🧭 코치에게 짚어보기') + '</button>' +
+        (c.busy ? '<button class="btn danger small" type="button" id="coach-stop">멈추기</button>' : '') + '</div>' +
+        '<p class="small muted">코치는 문장을 대신 쓰지 않고, 아쉬운 점과 스스로 답해볼 질문만 알려줘요.</p>' :
+        '<p class="small muted">🧭 코치(고쳐 쓰지 않고 짚어만 주는 AI)를 쓰려면 <a href="#" data-go="settings">설정</a>에서 LM Studio를 연결해요.</p>') +
+      (c.error ? '<p class="notice">' + esc(c.error) + '</p>' : '') +
+      ((c.busy && c.text) || d.coachNote ? '<pre class="out coach-out" id="coach-out">' + esc(c.busy ? c.text : d.coachNote) + '</pre>' : '') +
+      '</div></div>';
+  }
+  function draftCount(v, max) {
+    const n = Array.from(String(v || '').trim()).length;
+    return '<span class="' + (n > max ? 'over' : 'muted') + '">' + n + '자' + (n > max ? ' · 조금 길어요 (권장 ' + max + '자 이내)' : '') + '</span>';
+  }
+  function bindDraft(book, entry, live, commit) {
+    const dr = () => { const e = live(); e.draft = e.draft || {}; return e.draft; };
+    app.querySelectorAll('[data-star]').forEach(el => el.addEventListener('click', () => {
+      const q = live().quotes[Number(el.dataset.star)];
+      if (!q.id) q.id = uid();
+      const d = dr(); d.starId = d.starId === q.id ? '' : q.id;
+      commit(); render();
+      const card = document.getElementById('draft'); if (card) card.scrollIntoView({ block: 'start' });
+    }));
+    app.querySelectorAll('[data-draft]').forEach(el => el.addEventListener('input', () => {
+      dr()[el.dataset.draft] = el.value; commit();
+      document.getElementById('dc-' + el.dataset.draft).innerHTML = draftCount(el.value, Number(el.dataset.max));
+      const sec = F.draftSeconds(live());
+      document.getElementById('draft-sec').innerHTML = '<strong>' + (sec ? '쇼츠 예상 약 ' + sec + '초' : '아직 원고가 없어요') + '</strong> <span class="muted">· 목표 30~50초</span>';
+    }));
+    const run = document.getElementById('coach-run');
+    if (run) run.addEventListener('click', async () => {
+      const ctrl = new AbortController();
+      view.coach = { busy: true, text: '', ctrl };
+      render(); document.getElementById('draft').scrollIntoView({ block: 'start' });
+      try {
+        const mod = await import('./proofread.js?v=' + APP_VERSION);
+        const cfg = Object.assign({}, llm(), { claudeKey: settings.claudeKey });
+        const text = await mod.generateText(cfg, F.coachMessages(book, live()), {
+          temperature: 0.4, signal: ctrl.signal,
+          onText: tx => { view.coach.text = tx; const o = document.getElementById('coach-out'); if (o) o.textContent = tx; else if (view.name === 'book') render(); }
+        });
+        dr().coachNote = (text || '').trim(); commit();
+        view.coach = {};
+      } catch (e) {
+        view.coach = { error: e.name === 'AbortError' ? '코치를 멈췄어요.' : (e.message || String(e)) };
+      }
+      if (view.name === 'book') { render(); const card = document.getElementById('draft'); if (card) card.scrollIntoView({ block: 'start' }); }
+    });
+    const stop = document.getElementById('coach-stop');
+    if (stop) stop.addEventListener('click', () => { if (view.coach && view.coach.ctrl) view.coach.ctrl.abort(); });
   }
 
   const QUOTES_PER_PAGE = 20;
@@ -949,6 +1035,7 @@
       '<button class="back" type="button" id="back">← ' + esc(book.title) + '</button>' +
       '<h1>포스팅용 글</h1>' +
       '<p class="muted small">' + F.sessionNumber(book, view.date) + '번째 날 · ' + fmtDate(view.date) + ' 기록만 썼어요 · 내가 쓴 문장은 그대로 두고 순서와 형식만 바꿨어요.</p>' +
+      (entry && F.draftOf(entry) ? '<p class="notice">⭐ 오늘의 원고로 만들었어요. 블로그·Threads·대본·더빙 영상 모두 원고 내용을 써요. 원고는 책 화면 5번 칸에서 고쳐요.</p>' : '') +
       (entry && F.hasContent(entry) ? proofCardHtml() : '') +
       '<div class="date-chips">' + tabs.map(([k, l]) => '<button type="button" class="chip' + (k === tab ? ' on' : '') + '" data-tab="' + k + '">' + l + '</button>').join('') + '</div>' +
       '<div class="card">' + body + '</div>';

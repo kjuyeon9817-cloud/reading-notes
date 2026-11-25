@@ -44,6 +44,21 @@
   }
   function quotes(entry) { return (entry.quotes || []).filter(q => has(q.text)); }
   function apps(entry) { return (entry.applications || []).filter(a => has(a.text)); }
+
+  // ---------- 오늘의 원고 ----------
+  // 기록(나를 위한 메모)과 따로, 보는 사람을 위해 내가 다시 쓴 3~5줄. 하나라도 적었으면 원고를 쓴다.
+  function draftOf(entry) {
+    const d = entry && entry.draft;
+    if (!d || !(has(d.hook) || has(d.story) || has(d.action) || has(d.ask))) return null;
+    const qs = quotes(entry);
+    const quote = qs.find(q => q.id && q.id === d.starId) || null;
+    return { hook: t(d.hook), story: t(d.story), action: t(d.action), ask: t(d.ask), quote: quote };
+  }
+  function draftSeconds(entry) {
+    const d = draftOf(entry);
+    if (!d) return 0;
+    return seconds([d.hook, d.quote ? d.quote.text : '', d.story, d.action, d.ask].join(' ')) + 2 * 5;
+  }
   function hashtags(book, extra) {
     const tags = ['#독서노트', '#매일독서', tag(book.title)];
     if (has(book.author)) t(book.author).split(/\s*,\s*/).forEach(a => tags.push(tag(a)));
@@ -62,6 +77,8 @@
     const n = sessionNumber(book, entry.date);
     const title = '[독서노트 ' + n + '번째 날] ' + t(book.title) + (has(book.author) ? ' - ' + t(book.author) : '');
     const out = [];
+    const dr = draftOf(entry);
+    if (dr && dr.hook) out.push(dr.hook, '');
     out.push('📖 ' + t(book.title));
     out.push('저자: ' + (t(book.author) || '-') + ' · ' + (book.format === 'ebook' ? '전자책' : '종이책'));
     out.push('읽기 시작: ' + fmtDate(book.startDate) + ' · ' + n + '번째 날 (' + fmtDate(entry.date) + ')' + (has(entry.pages) ? ' · ' + t(entry.pages) + '까지' : ''));
@@ -83,6 +100,7 @@
         out.push('');
       });
     }
+    if (dr && dr.story) out.push('■ 이 문장에서 멈춘 이유', '', dr.story, '');
     if (has(entry.summary)) out.push('■ 오늘 읽은 내용', '', t(entry.summary), '');
     const as = apps(entry);
     if (as.length) {
@@ -90,6 +108,7 @@
       as.forEach((a, i) => out.push((i + 1) + '. ' + t(a.text)));
       out.push('', '내일 해봤는지 다시 적을게요.', '');
     }
+    if (dr && dr.ask) out.push(dr.ask, '');
     if (has(opts.outro)) out.push(t(opts.outro), '');
     out.push(hashtags(book));
     return { title: title, body: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
@@ -116,6 +135,20 @@
   function threads(book, entry) {
     const n = sessionNumber(book, entry.date);
     const blocks = [];
+    const dr = draftOf(entry);
+    if (dr) {
+      // 원고가 있으면 원고만으로 짧고 깔끔하게
+      let head = (dr.hook ? dr.hook + '\n\n' : '') + '📖 ' + t(book.title) + ' · ' + n + '번째 날';
+      if (dr.quote) head += '\n\n"' + t(dr.quote.text) + '"';
+      blocks.push(head);
+      if (dr.story) blocks.push(dr.story);
+      if (dr.action) blocks.push('오늘 해볼 것 하나\n\n' + dr.action);
+      if (dr.ask) blocks.push(dr.ask);
+      blocks[blocks.length - 1] += '\n\n' + hashtags(book).split(' ').slice(0, 3).join(' ');
+      const out = [];
+      blocks.forEach(b => splitToLimit(b, THREADS_LIMIT).forEach(p => out.push(p)));
+      return out;
+    }
     const qs = quotes(entry);
     let head = '📖 ' + t(book.title) + ' · ' + n + '번째 날';
     if (qs.length) head += '\n\n"' + t(qs[0].text) + '"' + (has(qs[0].reason) ? '\n\n' + t(qs[0].reason) : '');
@@ -142,6 +175,8 @@
     opts = opts || {};
     const n = sessionNumber(book, entry.date);
     const scenes = [];
+    const dr = draftOf(entry);
+    if (dr && dr.hook) scenes.push({ part: '첫 마디', screen: dr.hook, say: dr.hook });
     scenes.push({ part: '시작', screen: t(book.title) + '\n' + (t(book.author) || '') + '\n' + n + '번째 날', say: has(opts.intro) ? t(opts.intro) : '' });
     if (has(book.whyReading) && isFirstEntry(book, entry)) scenes.push({ part: '읽게 된 이유', screen: '이 책을 읽게 된 이유', say: t(book.whyReading) });
     const prev = previousChecks(book, entry);
@@ -153,8 +188,10 @@
       scenes.push({ part: '문장 ' + (i + 1), screen: t(q.text) + (has(q.page) ? '\n(' + t(q.page) + ')' : ''), say: t(q.text) });
       if (has(q.reason)) scenes.push({ part: '문장 ' + (i + 1) + '을 고른 이유', screen: '', say: t(q.reason) });
     });
+    if (dr && dr.story) scenes.push({ part: '내 이야기', screen: '', say: dr.story });
     if (has(entry.summary)) scenes.push({ part: '오늘 읽은 내용', screen: '오늘 읽은 내용', say: t(entry.summary) });
     apps(entry).forEach((a, i) => scenes.push({ part: '적용 ' + (i + 1), screen: (i + 1) + '. ' + t(a.text), say: t(a.text) }));
+    if (dr && dr.ask) scenes.push({ part: '여러분은요?', screen: dr.ask, say: dr.ask });
     if (has(opts.outro)) scenes.push({ part: '마무리', screen: '', say: t(opts.outro) });
     return withTiming(scenes, 180, 300);
   }
@@ -166,6 +203,15 @@
     const n = sessionNumber(book, entry.date);
     const q = quotes(entry)[qi];
     const scenes = [];
+    const dr = draftOf(entry);
+    if (dr) {
+      scenes.push(dr.hook ? { part: '첫 마디', screen: dr.hook, say: dr.hook } : { part: '첫 화면', screen: t(book.title) + ' · ' + n + '번째 날', say: '' });
+      if (dr.quote) scenes.push({ part: '오늘의 문장', screen: t(dr.quote.text), say: t(dr.quote.text) });
+      if (dr.story) scenes.push({ part: '내 이야기', screen: '', say: dr.story });
+      if (dr.action) scenes.push({ part: '오늘 해볼 것', screen: dr.action, say: dr.action });
+      if (dr.ask) scenes.push({ part: '여러분은요?', screen: dr.ask, say: dr.ask });
+      return withTiming(scenes, 0, SHORT_MAX_SEC);
+    }
     scenes.push({ part: '첫 화면', screen: t(book.title) + ' · ' + n + '번째 날', say: '' });
     if (q) {
       scenes.push({ part: '문장', screen: t(q.text), say: t(q.text) });
@@ -218,6 +264,32 @@
     const as = apps(entry);
     if (as.length) { lines.push('', '[내 삶에 적용할 것]'); as.forEach((a, i) => lines.push((i + 1) + '. ' + t(a.text))); }
     return lines.join('\n');
+  }
+
+  // 원고 코치: 고쳐 쓰지 않고 짚어만 준다
+  function coachMessages(book, entry) {
+    const d = (entry && entry.draft) || {};
+    const q = quotes(entry).find(x => x.id && x.id === d.starId);
+    const system = [
+      '당신은 짧은 독서 영상(쇼츠·릴스) 원고를 봐주는 코치입니다.',
+      '글쓴이는 AI가 대신 써주는 글을 원하지 않습니다. 생각은 글쓴이가 합니다.',
+      '',
+      '반드시 지킬 것:',
+      '- 문장을 고쳐 쓰거나, 바꿀 문장이나 예시 문장을 절대 주지 않습니다.',
+      '- 대신 무엇이 아쉬운지와, 글쓴이가 스스로 답해 볼 질문을 줍니다.',
+      '- 최대 3가지만, 가장 중요한 것부터. 각 항목은 2문장 이내.',
+      '- 각 항목 앞에 어느 칸인지 [첫 한 줄] [오늘의 문장] [내 이야기] [하나의 실천] [마지막 질문] 중 하나를 붙입니다.',
+      '- 잘된 점이 있으면 마지막에 한 줄로 짚어줍니다.',
+      '',
+      '보는 기준: 첫 한 줄은 2초 안에 멈추게 하는가(짧고 구체적인가), 내 이야기에 구체적인 장면이 있는가, 실천은 보는 사람도 오늘 할 수 있을 만큼 작은가, 질문은 댓글로 답하기 쉬운가, 전체가 한 가지 메시지로 모이는가.',
+      '인사말 없이 바로 시작합니다.'
+    ].join('\n');
+    const user = '[책] ' + t(book.title) + '\n\n[첫 한 줄]\n' + (t(d.hook) || '(비어 있음)') +
+      '\n\n[오늘의 문장]\n' + (q ? t(q.text) : '(고르지 않음)') +
+      '\n\n[내 이야기]\n' + (t(d.story) || '(비어 있음)') +
+      '\n\n[하나의 실천]\n' + (t(d.action) || '(비어 있음)') +
+      '\n\n[마지막 질문]\n' + (t(d.ask) || '(비어 있음)');
+    return [{ role: 'system', content: system }, { role: 'user', content: user }];
   }
 
   function restyleMessages(book, entry, o) {
@@ -288,6 +360,7 @@
   return {
     blog: blog, threads: threads, longScript: longScript, dayLongScript: dayLongScript, hasContent: hasContent, shortScript: shortScript,
     scriptText: scriptText, dayNumber: dayNumber, sessionNumber: sessionNumber, THREADS_LIMIT: THREADS_LIMIT,
+    draftOf: draftOf, draftSeconds: draftSeconds, coachMessages: coachMessages,
     restyleMessages: restyleMessages, parsePosts: parsePosts, RS_PLATFORMS: RS_PLATFORMS, RS_FORMATS: RS_FORMATS, RS_TONES: RS_TONES
   };
 });
