@@ -269,6 +269,61 @@
     return lines.join('\n');
   }
 
+  // ---------- 옵시디언·wikiagent용 마크다운 ----------
+  // 내가 쓴 문장은 그대로 두고, 제목·머리말(frontmatter)·[[링크]]만 붙인다.
+  function safeName(s) { return t(s).replace(/[\\/:*?"<>|#^\[\]]+/g, ' ').replace(/\s+/g, ' ').trim() || '제목 없음'; }
+  function yamlStr(s) { return '"' + t(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ') + '"'; }
+  function markdown(book, entry) {
+    const n = sessionNumber(book, entry.date);
+    const authors = has(book.author) ? t(book.author).split(/\s*,\s*/).filter(Boolean) : [];
+    const tags = ['독서노트', safeName(book.title).replace(/\s+/g, '_')].concat(has(book.topic) ? [t(book.topic).replace(/\s+/g, '_')] : []);
+    const L = [];
+    L.push('---', 'type: reading-note', 'book: ' + yamlStr(book.title), 'author: ' + yamlStr(book.author),
+      'format: ' + (book.format === 'ebook' ? '전자책' : '종이책'), 'topic: ' + yamlStr(book.topic),
+      'started: ' + t(book.startDate), 'date: ' + entry.date, 'day: ' + n, 'pages: ' + yamlStr(entry.pages),
+      'tags: [' + tags.map(yamlStr).join(', ') + ']', 'source: reading-notes', '---', '');
+    L.push('# ' + t(book.title) + ' · ' + n + '번째 날 (' + entry.date + ')', '');
+    L.push('책: [[' + safeName(book.title) + ']]' + (authors.length ? ' · 저자: ' + authors.map(a => '[[' + safeName(a) + ']]').join(', ') : '') +
+      (has(book.topic) ? ' · 주제: [[' + safeName(book.topic) + ']]' : '') + (has(entry.pages) ? ' · 읽은 곳: ' + t(entry.pages) : ''), '');
+    if (has(book.whyReading) && isFirstEntry(book, entry)) L.push('## 이 책을 읽게 된 이유', '', t(book.whyReading), '');
+    const prev = previousChecks(book, entry);
+    if (prev) {
+      L.push('## 지난번 실천 확인 (' + prev.date + ')', '');
+      prev.items.forEach(a => L.push('- [' + (a.practiced ? 'x' : ' ') + '] ' + t(a.text) + (a.practiced ? (has(a.result) ? ' → ' + t(a.result) : '') : (has(a.reason) ? ' → 못 한 이유: ' + t(a.reason) : ''))));
+      L.push('');
+    }
+    const qs = quotes(entry);
+    if (qs.length) {
+      L.push('## 발췌한 문장', '');
+      qs.forEach(q => {
+        t(q.text).split('\n').forEach(line => L.push('> ' + line));
+        const where = [tocTitle(book, q), t(q.page)].filter(Boolean).join(' · ');
+        if (where) L.push('> — ' + where);
+        L.push('');
+        if (has(q.reason)) L.push('**고른 이유:** ' + t(q.reason), '');
+      });
+    }
+    if (has(entry.summary)) L.push('## 오늘 읽은 내용', '', t(entry.summary), '');
+    const as = apps(entry);
+    if (as.length) {
+      L.push('## 현실에 적용하기', '');
+      as.forEach(a => L.push('- [' + (a.practiced ? 'x' : ' ') + '] ' + t(a.text) +
+        (a.practiced === true && has(a.result) ? ' → ' + t(a.result) : '') + (a.practiced === false && has(a.reason) ? ' → 못 한 이유: ' + t(a.reason) : '')));
+      L.push('');
+    }
+    const dr = draftOf(entry);
+    if (dr) {
+      L.push('## 오늘의 원고', '');
+      if (dr.hook) L.push('- 첫 한 줄: ' + dr.hook);
+      if (dr.quote) L.push('- 오늘의 문장: "' + t(dr.quote.text).replace(/\n/g, ' ') + '"');
+      if (dr.story) L.push('- 내 이야기: ' + dr.story);
+      if (dr.action) L.push('- 하나의 실천: ' + dr.action);
+      if (dr.ask) L.push('- 마지막 질문: ' + dr.ask);
+      L.push('');
+    }
+    return { fileName: safeName(book.title) + ' - ' + n + '번째 날.md', folder: entry.date, text: L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n' };
+  }
+
   // 원고 코치: 고쳐 쓰지 않고 짚어만 준다
   function coachMessages(book, entry) {
     const d = (entry && entry.draft) || {};
@@ -363,7 +418,7 @@
   return {
     blog: blog, threads: threads, longScript: longScript, dayLongScript: dayLongScript, hasContent: hasContent, shortScript: shortScript,
     scriptText: scriptText, dayNumber: dayNumber, sessionNumber: sessionNumber, THREADS_LIMIT: THREADS_LIMIT,
-    draftOf: draftOf, draftSeconds: draftSeconds, coachMessages: coachMessages,
+    markdown: markdown, draftOf: draftOf, draftSeconds: draftSeconds, coachMessages: coachMessages,
     restyleMessages: restyleMessages, parsePosts: parsePosts, RS_PLATFORMS: RS_PLATFORMS, RS_FORMATS: RS_FORMATS, RS_TONES: RS_TONES
   };
 });

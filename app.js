@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126d';
+  const APP_VERSION = '20261126e';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -534,7 +534,8 @@
       '<p class="small muted" style="margin:4px 0 0">이 날 읽은 내용만 적어요. 포스팅용 글도 이 날 기록으로만 만들어요. ' +
       '<label class="inline-date">지난 날 추가 <input type="date" id="pick-date" value="' + esc(date) + '" aria-label="다른 날짜 기록 보기"></label></p>' +
       '<label for="pages">이 날 읽은 곳 (선택)</label><input id="pages" type="text" placeholder="예: 45~92쪽, 3장까지" value="' + esc(entry.pages) + '">' +
-      '<div class="actions"><button class="btn small" id="to-export" type="button">' + sessionNo + '번째 날 기록으로 포스팅용 글 만들기</button></div>' +
+      '<div class="actions"><button class="btn small" id="to-export" type="button">' + sessionNo + '번째 날 기록으로 포스팅용 글 만들기</button>' +
+      '<button class="btn ghost small" id="to-md" type="button">📝 옵시디언으로 보내기</button></div>' +
       '</div>' +
 
       '<div class="card"><h2><span class="section-num">2</span>발췌한 문장</h2>' +
@@ -553,6 +554,11 @@
 
     document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
     document.getElementById('to-export').addEventListener('click', () => go({ name: 'export', bookId: book.id, date: date, tab: 'blog' }));
+    document.getElementById('to-md').addEventListener('click', () => {
+      const e = getEntry(book, date);
+      if (!e || !F.hasContent(e)) { alert('이 날 기록이 아직 없어요.'); return; }
+      sendMarkdown([F.markdown(book, e)]);
+    });
     document.getElementById('edit-book').addEventListener('click', () => go({ name: 'editbook', bookId: book.id }));
     const fin = document.getElementById('finish');
     if (fin) fin.addEventListener('click', () => { book.status = 'done'; book.finishedDate = todayStr(); commit(); render(); });
@@ -618,6 +624,37 @@
     function bindText(id, set) { bindEl(document.getElementById(id), set); }
     function bindEl(el, set) {
       el.addEventListener('input', () => { set(el.value); commit(); });
+    }
+  }
+
+  // ---------- 옵시디언·wikiagent로 보내기 ----------
+  function allMarkdown() {
+    const out = [];
+    Object.values(books).filter(b => !b.trashedAt).forEach(b =>
+      (b.entries || []).filter(e => F.hasContent(e)).forEach(e => out.push(F.markdown(b, e))));
+    return out;
+  }
+  async function sendMarkdown(notes) {
+    const mod = await import('./obsidian.js?v=' + APP_VERSION);
+    if (!mod.supported()) {
+      mod.download(notes);
+      setStatus('마크다운 파일을 내려받았어요');
+      return;
+    }
+    try {
+      let h = await mod.getFolder();
+      if (!h) {
+        if (!confirm('처음 한 번만 wikiagent 폴더(옵시디언 볼트)를 골라 주세요.\n기록은 그 안의 00_Raw/날짜/ 폴더에 저장돼요.')) return;
+        h = await mod.pickFolder();
+      }
+      const done = await mod.writeNotes(h, notes);
+      setStatus(h.name + '에 ' + done.length + '개 저장함');
+      alert(h.name + ' 폴더에 ' + done.length + '개 파일을 저장했어요.\n\n' + done.slice(0, 5).join('\n') + (done.length > 5 ? '\n…' : '') +
+        '\n\nwikiagent에게 "오늘 지식 구조화해줘"라고 말하면 분류를 시작해요.');
+      if (view.name === 'settings') renderSettings();
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      alert('저장하지 못했어요: ' + (e.message || e));
     }
   }
 
@@ -1349,6 +1386,12 @@
       '<label for="s-intro">영상 시작 인사</label><textarea id="s-intro" style="min-height:60px" placeholder="예: 오늘도 읽고 버틴 하루, 기록을 나눠요.">' + esc(state.intro) + '</textarea>' +
       '<label for="s-outro">마무리 인사 (블로그·영상 끝)</label><textarea id="s-outro" style="min-height:60px">' + esc(state.outro) + '</textarea>' +
       '</div>' +
+      '<div class="card"><h2>옵시디언 · wikiagent</h2>' +
+      '<p class="small muted">독서 기록을 마크다운 파일로 만들어 wikiagent 폴더의 <code>00_Raw/날짜/</code>에 저장해요. 같은 날 기록을 다시 보내면 파일이 새 내용으로 바뀌어요.</p>' +
+      '<p class="small" id="s-vault">확인 중…</p>' +
+      '<div class="actions"><button class="btn ghost small" id="s-vault-pick" type="button">폴더 고르기</button>' +
+      '<button class="btn small" id="s-vault-all" type="button">전체 기록 보내기</button></div>' +
+      '</div>' +
       '<div class="card"><h2>백업</h2>' +
       '<p class="small muted">모든 기록을 파일 하나로 내려받거나, 백업 파일에서 불러와요.</p>' +
       '<div class="actions"><button class="btn ghost" id="b-export" type="button">백업 내려받기</button>' +
@@ -1363,6 +1406,27 @@
       changeConnection({ owner, repo, token });
     });
     document.getElementById('s-sync').addEventListener('click', () => pullAll());
+    (async () => {
+      const mod = await import('./obsidian.js?v=' + APP_VERSION);
+      const el = document.getElementById('s-vault'), pick = document.getElementById('s-vault-pick');
+      if (!el) return;
+      if (!mod.supported()) {
+        el.innerHTML = '<span class="muted">이 브라우저는 폴더에 바로 저장할 수 없어서, 파일로 내려받아요. 컴퓨터의 크롬이나 엣지에서는 폴더에 바로 저장돼요.</span>';
+        pick.hidden = true;
+      } else {
+        const h = await mod.getFolder();
+        el.innerHTML = h ? '저장할 폴더: <strong>' + esc(h.name) + '</strong>' : '<span class="muted">아직 폴더를 고르지 않았어요. wikiagent 폴더(예: OneDrive/wikiagent)를 골라 주세요.</span>';
+        pick.textContent = h ? '다른 폴더 고르기' : '폴더 고르기';
+        pick.addEventListener('click', async () => {
+          try { await mod.pickFolder(); renderSettings(); } catch (e) { if (e.name !== 'AbortError') alert(e.message); }
+        });
+      }
+      document.getElementById('s-vault-all').addEventListener('click', () => {
+        const notes = allMarkdown();
+        if (!notes.length) { alert('보낼 기록이 아직 없어요.'); return; }
+        sendMarkdown(notes);
+      });
+    })();
     ['intro', 'outro'].forEach(k => document.getElementById('s-' + k).addEventListener('input', e => {
       state[k] = e.target.value; persist();
     }));
