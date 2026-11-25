@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261125c';
+  const APP_VERSION = '20261125d';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -392,6 +392,14 @@
       .sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
   }
 
+  // 책마다 다른 흙빛 표지색 (제목으로 정함)
+  function coverTone(title) {
+    const tones = [['#b9a28e', '#8f7a68'], ['#c8b6a4', '#a48d79'], ['#a99a8a', '#7b6c5f'], ['#cbb9a0', '#9c8669'], ['#b4a596', '#8a7b70'], ['#bfae9f', '#957f6f']];
+    let h = 0; for (const c of String(title || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    const [a, b] = tones[h % tones.length];
+    return 'radial-gradient(70% 60% at 30% 25%, rgba(255,255,255,.28), transparent 70%), linear-gradient(160deg,' + a + ',' + b + ')';
+  }
+
   function renderList() {
     const reading = sortedBooks('reading');
     const done = sortedBooks('done');
@@ -400,26 +408,32 @@
       const todayDone = (() => { const e = getEntry(b, t); return e && !entryIsEmpty(e); })();
       const pend = pendingChecks(b);
       return '<button class="book-card" data-open="' + esc(b.id) + '" type="button">' +
-        '<div class="row"><span class="title">' + esc(b.title || '제목 없음') + '</span>' +
-        '<span class="day-count">' + readingDay(b) + '일째</span></div>' +
+        '<div class="book-cover" style="background:' + coverTone(b.title) + '">' + esc(b.title || '제목 없음') +
+        '<span class="cover-day">' + (b.status === 'done' ? '완독' : 'DAY ' + readingDay(b)) + '</span></div>' +
+        '<div class="book-body">' +
         '<div class="meta">' + esc(b.author || '저자 미입력') + ' · ' + (b.format === 'ebook' ? '전자책' : '종이책') +
-        ' · ' + fmtDate(b.startDate) + ' 시작' + (b.topic ? ' · ' + esc(b.topic) : '') + '</div>' +
+        (b.topic ? ' · ' + esc(b.topic) : '') + '</div>' +
+        '<div class="meta">' + fmtDate(b.startDate) + ' 시작 · <span class="day-count">' + readingDay(b) + '일째</span></div>' +
         '<div class="badges">' +
         (b.status === 'done' ? '<span class="badge">완독 ' + fmtDate(b.finishedDate) + '</span>' :
           (todayDone ? '<span class="badge ok">오늘 기록함</span>' : '<span class="badge">오늘 기록 전</span>')) +
-        (pend ? '<span class="badge warn">실천 체크 ' + pend + '개 남음</span>' : '') +
-        '</div></button>';
+        (pend ? '<span class="badge warn">실천 체크 ' + pend + '개</span>' : '') +
+        '</div></div></button>';
     };
     app.innerHTML =
-      '<h1>읽고 있는 책</h1>' +
-      '<p class="muted small">' + fmtDate(t) + ' · 문장이 서툴러도 괜찮아요. 오늘 읽은 만큼만 적어요.</p>' +
+      '<section class="hero">' +
+      '<h1 class="hero-word">Reading<br>Notes</h1>' +
+      '<p class="hero-sub">읽 고 · 쓰 고 · 버 티 는 기 록</p>' +
+      '<div class="actions"><button class="btn arrow" data-go="newbook" type="button">새 책 시작하기</button>' +
+      '<button class="btn ghost" id="day-export" type="button">오늘 롱폼 대본</button></div>' +
+      '</section>' +
+      '<div class="intro"><p class="spaced">문장이 서툴러도<br>괜찮아요</p>' +
+      '<p>' + fmtDate(t) + '<br>오늘 읽은 만큼만, 내 말로 적어요. 기록은 휴대폰과 컴퓨터 어디서든 이어져요.</p></div>' +
       (!ghReady() ? '<p class="notice">아직 이 기기에만 저장돼요. <a href="#" data-go="settings">설정</a>에서 GitHub를 연결하면 휴대폰과 컴퓨터가 같은 기록을 봐요.</p>' : '') +
-      '<div class="actions"><button class="btn" data-go="newbook" type="button">+ 새 책 시작하기</button>' +
-      '<button class="btn ghost" id="day-export" type="button">오늘 기록으로 롱폼 대본 만들기</button></div>' +
-      '<div class="book-list" style="margin-top:12px">' +
-      (reading.length ? reading.map(card).join('') : '<div class="empty">아직 읽고 있는 책이 없어요.</div>') +
-      '</div>' +
-      (done.length ? '<h2 style="margin-top:28px">다 읽은 책 (' + done.length + ')</h2><div class="book-list">' + done.map(card).join('') + '</div>' : '');
+      '<h2 class="list-section-title">지금 읽는 책</h2>' +
+      (reading.length ? '<div class="book-list">' + reading.map(card).join('') + '</div>' : '<div class="empty-hero">아직 읽고 있는 책이 없어요</div>') +
+      (done.length ? '<h2 class="list-section-title">다 읽은 책 · ' + done.length + '</h2><div class="book-list">' + done.map(card).join('') + '</div>' : '') +
+      '<p class="foot">하루하루 버티는 사람들에게, 사람의 문장으로</p>';
     app.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => go({ name: 'book', bookId: el.dataset.open, date: todayStr() })));
     document.getElementById('day-export').addEventListener('click', () => go({ name: 'dayexport', date: todayStr() }));
   }
