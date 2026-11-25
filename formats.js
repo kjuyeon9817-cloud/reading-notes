@@ -44,6 +44,7 @@
   }
   function quotes(entry) { return (entry.quotes || []).filter(q => has(q.text)); }
   function apps(entry) { return (entry.applications || []).filter(a => has(a.text)); }
+  function tocTitle(book, q) { const x = q && q.tocId ? (book.toc || []).find(c => c.id === q.tocId) : null; return x ? t(x.title) : ''; }
 
   // ---------- 오늘의 원고 ----------
   // 기록(나를 위한 메모)과 따로, 보는 사람을 위해 내가 다시 쓴 3~5줄. 하나라도 적었으면 원고를 쓴다.
@@ -95,7 +96,8 @@
     if (qs.length) {
       out.push('■ 오늘 마음에 남은 문장', '');
       qs.forEach(q => {
-        out.push('" ' + t(q.text) + ' "' + (has(q.page) ? ' (' + t(q.page) + ')' : ''));
+        const where = [tocTitle(book, q), t(q.page)].filter(Boolean).join(' · ');
+        out.push('" ' + t(q.text) + ' "' + (where ? ' (' + where + ')' : ''));
         if (has(q.reason)) out.push('', '고른 이유: ' + t(q.reason));
         out.push('');
       });
@@ -185,7 +187,8 @@
       say: a.practiced ? t(a.result) : t(a.reason)
     }));
     quotes(entry).forEach((q, i) => {
-      scenes.push({ part: '문장 ' + (i + 1), screen: t(q.text) + (has(q.page) ? '\n(' + t(q.page) + ')' : ''), say: t(q.text) });
+      const where = [tocTitle(book, q), t(q.page)].filter(Boolean).join(' · ');
+      scenes.push({ part: tocTitle(book, q) || ('문장 ' + (i + 1)), screen: t(q.text) + (where ? '\n(' + where + ')' : ''), say: t(q.text) });
       if (has(q.reason)) scenes.push({ part: '문장 ' + (i + 1) + '을 고른 이유', screen: '', say: t(q.reason) });
     });
     if (dr && dr.story) scenes.push({ part: '내 이야기', screen: '', say: dr.story });

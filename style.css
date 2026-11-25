@@ -319,3 +319,20 @@ input:focus, textarea:focus, select:focus { outline-color: var(--yellow-deep); }
 .coach { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .coach-out { white-space: pre-wrap; }
 .video-cta .btn { white-space: nowrap; flex-shrink: 0; }
+
+/* 목차 */
+.toc-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.toc-head { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; background: none; border: 0; border-radius: 10px; padding: 8px 10px; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.toc-head:hover:not([disabled]) { background: var(--accent-soft); }
+.toc-head[disabled] { cursor: default; }
+.toc-item.lv1 .toc-title { font-weight: 700; }
+.toc-item.lv2 .toc-head { padding-left: 28px; font-size: .92rem; }
+.toc-item.lv2 .toc-title::before { content: "└ "; color: var(--muted); }
+.toc-count { flex-shrink: 0; min-width: 24px; text-align: center; background: var(--yellow); border-radius: 999px; font-size: .75rem; font-weight: 700; padding: 1px 8px; }
+.toc-item.open .toc-head { background: var(--accent-soft); }
+.toc-quotes { display: flex; flex-direction: column; gap: 4px; padding: 6px 0 8px 14px; }
+.toc-q { text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: .9rem; color: var(--ink); cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.toc-q:hover { border-color: var(--yellow); }
+.qtoc { flex-shrink: 0; font-size: .7rem; background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; color: var(--ink); white-space: nowrap; }
+select { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); }
+.qtoc { max-width: 32%; overflow: hidden; text-overflow: ellipsis; }

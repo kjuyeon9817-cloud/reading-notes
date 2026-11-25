@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126b';
+  const APP_VERSION = '20261126c';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -522,6 +522,7 @@
 
       '<div class="card"><h2><span class="section-num">1</span>이 책을 읽게 된 이유</h2>' +
       '<textarea id="why" placeholder="왜 이 책을 골랐나요?">' + esc(book.whyReading) + '</textarea></div>' +
+      tocHtml(book) +
 
       '<div class="card">' +
       '<div class="session-tabs" role="tablist">' + dates.map((d, i) => {
@@ -537,7 +538,7 @@
       '</div>' +
 
       '<div class="card"><h2><span class="section-num">2</span>발췌한 문장</h2>' +
-      quotesListHtml(entry.quotes) +
+      quotesListHtml(entry.quotes, book) +
       '<button class="btn ghost small" id="add-quote" type="button">+ 문장 추가</button></div>' +
 
       '<div class="card"><h2><span class="section-num">3</span>오늘 읽은 내용 정리</h2>' +
@@ -612,6 +613,7 @@
     });
 
     bindDraft(book, entry, live, commit);
+    bindToc(book, commit);
 
     function bindText(id, set) { bindEl(document.getElementById(id), set); }
     function bindEl(el, set) {
@@ -702,10 +704,80 @@
     if (stop) stop.addEventListener('click', () => { if (view.coach && view.coach.ctrl) view.coach.ctrl.abort(); });
   }
 
+  // ---------- 목차 ----------
+  // book.toc = [{ id, title, level: 1|2 }]. 발췌 문장은 quote.tocId로 목차에 연결한다.
+  function tocItem(book, id) { return id ? (book.toc || []).find(t => t.id === id) : null; }
+  function shortToc(title) { return title.length > 12 ? title.slice(0, 12) + '…' : title; }
+  function tocQuotes(book, id) {
+    const out = [];
+    (book.entries || []).forEach(e => (e.quotes || []).forEach((q, i) => {
+      if (q.tocId === id && q.text && q.text.trim()) out.push({ date: e.date, i, q });
+    }));
+    return out.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  function parseToc(text, old) {
+    const pool = (old || []).slice();
+    return String(text || '').split('\n').map(line => {
+      if (!line.trim()) return null;
+      const level = /^(\s+|[-·*└ㄴ]\s*)/.test(line) ? 2 : 1;
+      const title = line.replace(/^[\s\-·*└ㄴ]+/, '').trim();
+      if (!title) return null;
+      const k = pool.findIndex(t => t.title === title);
+      const id = k >= 0 ? pool.splice(k, 1)[0].id : uid();
+      return { id, title, level };
+    }).filter(Boolean);
+  }
+  function tocHtml(book) {
+    const toc = book.toc || [];
+    let h = '<div class="card toc-card" id="toc"><div class="quote-head"><h2 style="margin:0">📑 목차</h2>' +
+      (!view.tocEdit ? '<button class="btn ghost small" type="button" id="toc-edit">' + (toc.length ? '목차 고치기' : '목차 적기') + '</button>' : '') + '</div>';
+    if (view.tocEdit) {
+      return h + '<p class="small muted">한 줄에 하나씩 적어요. 앞에 띄어쓰기나 - 를 붙이면 하위 목차가 돼요. 책 목차를 복사해 붙여넣어도 돼요.</p>' +
+        '<textarea id="toc-text" style="min-height:180px" placeholder="1장 왜 읽어야 하는가\n - 읽는 뇌\n - 읽기의 위기\n2장 어떻게 읽을 것인가">' +
+        esc(toc.map(t => (t.level === 2 ? '  - ' : '') + t.title).join('\n')) + '</textarea>' +
+        '<div class="actions"><button class="btn small" type="button" id="toc-save">저장</button><button class="btn ghost small" type="button" id="toc-cancel">취소</button></div></div>';
+    }
+    if (!toc.length) return h + '<p class="small muted" style="margin:8px 0 0">목차를 적어두면 발췌한 문장이 어느 목차에 속하는지 고를 수 있어요.</p></div>';
+    const shortDate = d => { const x = parseDay(d); return (x.getMonth() + 1) + '/' + x.getDate(); };
+    h += '<div class="toc-list">' + toc.map(t => {
+      const qs = tocQuotes(book, t.id), open = view.tocOpen === t.id;
+      return '<div class="toc-item lv' + t.level + (open ? ' open' : '') + '">' +
+        '<button type="button" class="toc-head" data-tocopen="' + esc(t.id) + '"' + (qs.length ? '' : ' disabled') + '>' +
+        '<span class="toc-title">' + esc(t.title) + '</span>' + (qs.length ? '<span class="toc-count">' + qs.length + '</span>' : '') + '</button>' +
+        (open ? '<div class="toc-quotes">' + qs.map(x => '<button type="button" class="toc-q" data-tocq="' + x.date + '|' + x.i + '">' +
+          '<span class="small muted">' + shortDate(x.date) + (x.q.page ? ' · ' + esc(x.q.page) : '') + '</span>' +
+          esc(x.q.text.trim().split('\n')[0].slice(0, 60)) + '</button>').join('') + '</div>' : '') + '</div>';
+    }).join('') + '</div>';
+    const linked = new Set(); (book.entries || []).forEach(e => (e.quotes || []).forEach(q => { if (tocItem(book, q.tocId)) linked.add(q); }));
+    const all = (book.entries || []).reduce((n, e) => n + (e.quotes || []).filter(q => q.text && q.text.trim()).length, 0);
+    return h + '<p class="small muted" style="margin:8px 0 0">발췌 ' + all + '개 중 ' + linked.size + '개가 목차에 연결됐어요. 숫자가 있는 목차를 누르면 그 문장들이 보여요.</p></div>';
+  }
+  function bindToc(book, commit) {
+    const ed = document.getElementById('toc-edit');
+    if (ed) ed.addEventListener('click', () => { view.tocEdit = true; render(); const ta = document.getElementById('toc-text'); if (ta) { ta.focus(); ta.scrollIntoView({ block: 'center' }); } });
+    const sv = document.getElementById('toc-save');
+    if (sv) sv.addEventListener('click', () => {
+      book.toc = parseToc(document.getElementById('toc-text').value, book.toc);
+      view.tocEdit = false; commit(); render();
+      document.getElementById('toc').scrollIntoView({ block: 'start' });
+    });
+    const cc = document.getElementById('toc-cancel');
+    if (cc) cc.addEventListener('click', () => { view.tocEdit = false; render(); });
+    app.querySelectorAll('[data-tocopen]').forEach(el => el.addEventListener('click', () => {
+      view.tocOpen = view.tocOpen === el.dataset.tocopen ? null : el.dataset.tocopen; render();
+      document.getElementById('toc').scrollIntoView({ block: 'start' });
+    }));
+    app.querySelectorAll('[data-tocq]').forEach(el => el.addEventListener('click', () => {
+      const [d, i] = el.dataset.tocq.split('|');
+      go({ name: 'book', bookId: book.id, date: d, openQuote: Number(i), qpage: Math.floor(Number(i) / QUOTES_PER_PAGE), tocOpen: view.tocOpen });
+      setTimeout(() => { const r = app.querySelector('[data-qopen="' + i + '"]'); if (r) r.scrollIntoView({ block: 'center' }); }, 0);
+    }));
+  }
+
   const QUOTES_PER_PAGE = 20;
 
   // 발췌 문장: 한 줄 목록으로 접어 두고, 누른 문장만 펼쳐서 쪽수·고른 이유와 함께 고친다.
-  function quotesListHtml(quotes) {
+  function quotesListHtml(quotes, book) {
     const pages = Math.max(1, Math.ceil(quotes.length / QUOTES_PER_PAGE));
     const page = Math.min(Math.max(view.qpage || 0, 0), pages - 1);
     const start = page * QUOTES_PER_PAGE;
@@ -718,10 +790,11 @@
         '<button type="button" class="qrow-head" data-qopen="' + i + '" aria-expanded="' + open + '">' +
         '<span class="qnum">' + (i + 1) + '</span>' +
         '<span class="qtext' + (first ? '' : ' muted') + '">' + esc(preview) + '</span>' +
+        (tocItem(book, q.tocId) ? '<span class="qtoc">' + esc(shortToc(tocItem(book, q.tocId).title)) + '</span>' : '') +
         (q.page ? '<span class="qpage">' + esc(q.page) + '</span>' : '') +
         '<span class="qmark" title="' + (q.reason && q.reason.trim() ? '고른 이유 있음' : '고른 이유 없음') + '">' + (q.reason && q.reason.trim() ? '✎' : '') + '</span>' +
         '<span class="qchev">' + (open ? '▲' : '▼') + '</span></button>' +
-        (open ? quoteHtml(q, i) : '') + '</div>';
+        (open ? quoteHtml(q, i, book) : '') + '</div>';
     }).join('');
     const pager = pages > 1 ? '<div class="pager">' + Array.from({ length: pages }, (_, p) =>
       '<button type="button" class="chip' + (p === page ? ' on' : '') + '" data-qpage="' + p + '">' +
@@ -730,11 +803,15 @@
       '<div id="quotes">' + rows + '</div>' + pager;
   }
 
-  function quoteHtml(q, i) {
+  function quoteHtml(q, i, book) {
     return '<div class="quote">' +
       '<div class="quote-head"><h3>문장 ' + (i + 1) + '</h3>' +
       '<button class="btn danger small" type="button" data-qi="' + i + '" data-qf="remove">지우기</button></div>' +
       '<textarea data-qi="' + i + '" data-qf="text" placeholder="마음에 남은 문장을 그대로 옮겨요.">' + esc(q.text) + '</textarea>' +
+      '<label>목차 (선택)</label>' +
+      ((book.toc || []).length ? '<select data-qi="' + i + '" data-qf="tocId"><option value="">목차 고르기</option>' +
+        book.toc.map(t => '<option value="' + esc(t.id) + '"' + (t.id === q.tocId ? ' selected' : '') + '>' + (t.level === 2 ? '　└ ' : '') + esc(t.title) + '</option>').join('') + '</select>' :
+        '<p class="small muted" style="margin:0">위 📑 목차 칸에 목차를 적으면 여기서 고를 수 있어요.</p>') +
       '<label>쪽수 (선택)</label><input type="text" data-qi="' + i + '" data-qf="page" value="' + esc(q.page) + '">' +
       '<label>이 문장을 고른 이유</label>' +
       '<textarea data-qi="' + i + '" data-qf="reason" placeholder="왜 이 문장이 남았나요?">' + esc(q.reason) + '</textarea>' +
