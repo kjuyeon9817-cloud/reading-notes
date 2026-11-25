@@ -343,3 +343,9 @@ select { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(-
 .toc-item.lv2.open .toc-head { background: #fffaf0; }
 .toc-item.lv1.open .toc-item.lv2:not(.open) > .toc-head { background: none; }
 .toc-item.lv2 .toc-title { font-weight: 500; } .toc-chev { font-size: 1rem; color: var(--yellow-deep); }
+
+/* 연결 알림 */
+.connect-card { margin: 12px 0 4px; padding: 14px 16px; border-radius: 18px; background: #fff3cd; border: 2px solid var(--yellow-deep); }
+.connect-card p { margin: 6px 0 10px; }
+.check-line { display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px; }
+.check-line input { width: auto; }

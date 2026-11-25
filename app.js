@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126e';
+  const APP_VERSION = '20261126f';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -38,8 +38,15 @@
   let state = load(LS_STATE, null) || migrate();
   let { books, sync } = state.profiles[state.active];
   const legacySettings = load('rn.settings.v1', {});
+  // 토큰은 기본으로 기억하지 않는다. "이 기기에서 기억하기"를 켠 기기만 따로 보관한다.
+  const LS_TOKEN = 'rn.token.v1';
+  function savedTokens() { try { return JSON.parse(localStorage.getItem(LS_TOKEN) || '{}') || {}; } catch (e) { return {}; } }
+  function savedToken(key) { return key ? savedTokens()[key] || '' : ''; }
+  function rememberToken(key, token) {
+    try { const all = savedTokens(); if (token) all[key] = token; else delete all[key]; localStorage.setItem(LS_TOKEN, JSON.stringify(all)); } catch (e) { /* 저장 불가 */ }
+  }
   let settings = connection(state.active,
-    state.active === targetKey(legacySettings.owner, legacySettings.repo) ? legacySettings.token : '');
+    (state.active === targetKey(legacySettings.owner, legacySettings.repo) ? legacySettings.token : '') || savedToken(state.active));
   let storageFailed = false;
 
   function persist() {
@@ -405,6 +412,30 @@
     return 'color:' + ink + ';background:radial-gradient(70% 60% at 25% 20%, rgba(255,255,255,.35), transparent 70%), linear-gradient(150deg,' + a + ',' + b + ')';
   }
 
+  // GitHub에 연결된 적 있는 기기인데 토큰이 없으면, 앱을 열자마자 크게 알린다
+  function connectBannerHtml() {
+    if (!state.active) return '<div class="connect-card"><strong>⚠️ 지금 기록은 이 브라우저에만 저장돼요</strong>' +
+      '<p class="small">다른 브라우저나 기기에서도 같이 보려면 <a href="#" data-go="settings">설정</a>에서 GitHub를 연결해 주세요.</p></div>';
+    return '<div class="connect-card" id="connect-card"><strong>⚠️ GitHub 연결이 꺼져 있어요</strong>' +
+      '<p class="small">지금 적는 기록은 이 브라우저에만 저장돼요. 토큰을 넣으면 다른 기기·브라우저와 같은 기록을 봐요. (' + esc(state.active) + ')</p>' +
+      '<div class="date-bar"><input id="cb-token" type="password" autocomplete="off" placeholder="토큰 붙여넣기" style="flex:1">' +
+      '<button class="btn small" type="button" id="cb-go">연결</button></div>' +
+      '<label class="check-line small"><input type="checkbox" id="cb-remember"> 이 기기에서 토큰 기억하기 (내 기기에서만)</label></div>';
+  }
+  function bindConnectBanner() {
+    const go2 = document.getElementById('cb-go');
+    if (!go2) return;
+    const run = () => {
+      const token = document.getElementById('cb-token').value.trim();
+      if (!token) { document.getElementById('cb-token').focus(); return; }
+      const c = connection(state.active, token);
+      changeConnection({ owner: c.owner, repo: c.repo, token, remember: document.getElementById('cb-remember').checked })
+        .then(() => { if (view.name === 'list') render(); });
+    };
+    go2.addEventListener('click', run);
+    document.getElementById('cb-token').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+  }
+
   function renderList() {
     const reading = sortedBooks('reading');
     const done = sortedBooks('done');
@@ -426,6 +457,7 @@
         '</div></div></button>';
     };
     app.innerHTML =
+      (!ghReady() ? connectBannerHtml() : '') +
       '<section class="hero">' +
       '<p class="tagline"><span>📖 READ</span><span class="dot">•</span><span>✍️ WRITE</span><span class="dot">•</span><span>🤝 SHARE</span></p>' +
       '<h1 class="hero-word">오늘 읽은 한 문장이<br><span class="hl">누군가의 하루를 버티게</span></h1>' +
@@ -433,13 +465,13 @@
       '<div class="actions"><button class="btn arrow" data-go="newbook" type="button">새 책 시작하기</button>' +
       '<button class="btn ghost" id="day-export" type="button">오늘 롱폼 대본</button></div>' +
       '</section>' +
-      (!ghReady() ? '<p class="notice">아직 이 기기에만 저장돼요. <a href="#" data-go="settings">설정</a>에서 GitHub를 연결하면 휴대폰과 컴퓨터가 같은 기록을 봐요.</p>' : '') +
       '<h2 class="list-section-title">지금 읽는 책</h2>' +
       (reading.length ? '<div class="book-list">' + reading.map(card).join('') + '</div>' : '<div class="empty-hero">아직 읽고 있는 책이 없어요</div>') +
       (done.length ? '<h2 class="list-section-title">다 읽은 책 · ' + done.length + '</h2><div class="book-list">' + done.map(card).join('') + '</div>' : '') +
       '<p class="foot">하루하루 버티는 사람들에게, 사람의 문장으로</p>';
     app.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => go({ name: 'book', bookId: el.dataset.open, date: todayStr() })));
     document.getElementById('day-export').addEventListener('click', () => go({ name: 'dayexport', date: todayStr() }));
+    bindConnectBanner();
   }
 
   function renderBookForm(book) {
@@ -1327,7 +1359,8 @@
       if (state.active !== previousState.active && previousState.active === '' && !current) delete state.profiles[''];
       if (!persist()) { state = previousState; return; }
       ({ books, sync } = state.profiles[key]);
-      settings = { ...account, claudeKey: settings.claudeKey };
+      settings = { owner: account.owner, repo: account.repo, token: account.token, claudeKey: settings.claudeKey };
+      if (account.remember !== undefined) rememberToken(key, account.remember ? account.token : '');
       if (view.name === 'settings') renderSettings();
       else if (previousState.active !== state.active) go({ name: 'list' });
     } catch (e) {
@@ -1344,10 +1377,11 @@
       '<button class="back" type="button" id="back">← 책 목록</button>' +
       '<h1>설정</h1>' +
       '<div class="card"><h2>GitHub 연결 (기기 간 동기화)</h2>' +
-      '<p class="small muted">기록은 비공개 저장소의 <code>books/</code> 폴더에 저장돼요. 저장소를 바꾸면 해당 저장소의 기록이 열려요. 토큰은 페이지를 닫거나 새로 열면 다시 입력해요.</p>' +
+      '<p class="small muted">기록은 비공개 저장소의 <code>books/</code> 폴더에 저장돼요. 저장소를 바꾸면 해당 저장소의 기록이 열려요. "토큰 기억하기"를 켜지 않으면 페이지를 새로 열 때마다 토큰을 다시 넣어요.</p>' +
       '<label for="s-owner">GitHub 아이디</label><input id="s-owner" type="text" autocapitalize="off" autocomplete="off" value="' + esc(settings.owner) + '">' +
       '<label for="s-repo">기록 저장소 이름</label><input id="s-repo" type="text" autocapitalize="off" autocomplete="off" value="' + esc(settings.repo) + '">' +
       '<label for="s-token">토큰 (fine-grained personal access token)</label><input id="s-token" type="password" autocomplete="off">' +
+      '<label class="check-line"><input type="checkbox" id="s-remember"' + (savedToken(state.active) ? ' checked' : '') + '> 이 기기에서 토큰 기억하기 <span class="small muted">(내 컴퓨터·휴대폰에서만 켜세요)</span></label>' +
       '<p class="small muted">토큰 만들기: GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token. ' +
       'Repository access는 기록 저장소 <strong>하나만</strong> 고르고, Permissions에서 <strong>Contents: Read and write</strong>만 켜요.</p>' +
       '<div class="actions"><button class="btn" id="s-save" type="button">저장하고 동기화</button>' +
@@ -1403,9 +1437,14 @@
       const repo = document.getElementById('s-repo').value.trim();
       const token = document.getElementById('s-token').value.trim() ||
         (targetKey(owner, repo) === state.active ? settings.token : '');
-      changeConnection({ owner, repo, token });
+      changeConnection({ owner, repo, token, remember: document.getElementById('s-remember').checked });
     });
     document.getElementById('s-sync').addEventListener('click', () => pullAll());
+    document.getElementById('s-remember').addEventListener('change', e => {
+      if (!state.active || !settings.token) return; // 연결할 때 반영된다
+      rememberToken(state.active, e.target.checked ? settings.token : '');
+      setStatus(e.target.checked ? '이 기기에서 토큰을 기억해요' : '토큰을 기억하지 않아요');
+    });
     (async () => {
       const mod = await import('./obsidian.js?v=' + APP_VERSION);
       const el = document.getElementById('s-vault'), pick = document.getElementById('s-vault-pick');
@@ -1465,6 +1504,7 @@
       if (syncing || configuring) { setStatus('동기화가 끝난 뒤 다시 눌러주세요.'); return; }
       if (!confirm('이 기기에서 토큰을 지울까요? 기록은 남아 있어요.')) return;
       settings.token = '';
+      rememberToken(state.active, '');
       if (persist()) setStatus('이 기기에만 저장');
       render();
     });
