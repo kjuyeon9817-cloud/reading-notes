@@ -380,6 +380,31 @@
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
   }
 
+  // 첫 한 줄(훅) 후보: 포장만 돕는다. 글쓴이가 골라서 자기 말로 고친다.
+  function hookMessages(book, entry, id) {
+    const d = draftList(entry).find(x => x.id === id) || {};
+    const dq = draftOf(entry, d.id);
+    const ql = dq ? dq.quotes : [];
+    const system = [
+      '당신은 짧은 독서 콘텐츠(쇼츠·릴스·블로그)의 첫 문장을 제안하는 편집자입니다.',
+      '첫 문장(훅)은 처음 2초 안에 "이건 내 얘기다" 하고 멈추게 만드는 한 줄입니다.',
+      '',
+      '반드시 지킬 것:',
+      '- 후보 3개만, 서로 다른 방식으로: (1) 독자를 부르는 말 "~한 사람이라면" (2) 질문 "왜 ~할까?" (3) 의외의 사실이나 반전.',
+      '- 각 25자 안팎, 한 줄. 과장, 낚시, 숫자 지어내기 금지.',
+      '- 글쓴이의 제목·문장·이야기 안에 있는 내용만 씁니다. 기록에 없는 경험을 지어내지 않습니다.',
+      '- 형식: 1. (후보)\n2. (후보)\n3. (후보)  — 설명이나 인사말 없이.'
+    ].join('\n');
+    const user = '[책] ' + t(book.title) + '\n[제목·주제] ' + (t(d.theme) || '(없음)') +
+      ql.map((q, i) => '\n[문장 ' + (i + 1) + '] ' + t(q.text) + '\n[고른 이유] ' + (t(q.reason) || '(없음)')).join('') +
+      '\n[내 이야기] ' + (t(d.story) || '(없음)') + '\n[지금 쓴 첫 한 줄] ' + (t(d.hook) || '(없음)');
+    return [{ role: 'system', content: system }, { role: 'user', content: user }];
+  }
+  function parseHooks(text) {
+    return String(text || '').split('\n').map(l => l.replace(/^\s*(\d+[.)]|[-*•])\s*/, '').replace(/^["“]|["”]$/g, '').trim())
+      .filter(l => l && l.length <= 80 && !/^#|후보/.test(l)).slice(0, 3);
+  }
+
   // 주제로 묶기: AI는 묶음과 제목 후보만 제안한다. 본문은 쓰지 않는다.
   function themeMessages(book, entry) {
     const qs = quotes(entry);
@@ -484,7 +509,7 @@
   return {
     blog: blog, threads: threads, longScript: longScript, dayLongScript: dayLongScript, hasContent: hasContent, shortScript: shortScript,
     scriptText: scriptText, dayNumber: dayNumber, sessionNumber: sessionNumber, THREADS_LIMIT: THREADS_LIMIT,
-    markdown: markdown, draftOf: draftOf, draftList: draftList, themeMessages: themeMessages, parseThemes: parseThemes, draftSeconds: draftSeconds, coachMessages: coachMessages,
+    markdown: markdown, draftOf: draftOf, draftList: draftList, themeMessages: themeMessages, hookMessages: hookMessages, parseHooks: parseHooks, parseThemes: parseThemes, draftSeconds: draftSeconds, coachMessages: coachMessages,
     restyleMessages: restyleMessages, parsePosts: parsePosts, RS_PLATFORMS: RS_PLATFORMS, RS_FORMATS: RS_FORMATS, RS_TONES: RS_TONES
   };
 });

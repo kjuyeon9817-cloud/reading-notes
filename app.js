@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126h';
+  const APP_VERSION = '20261126i';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -743,6 +743,7 @@
         return '<div class="draft-field"><label for="d-' + k + '">' + label + '</label><p class="small muted draft-help">' + help + '</p>' +
           (k === 'story' ? chosen.map(x => ref('문장 ' + (x.i + 1) + '을 고른 이유', x.q.reason)).join('') : '') +
           (k === 'action' ? ref('내 적용 방법', apps) : '') +
+          (k === 'hook' ? hookIdeasHtml(cur, ready) : '') +
           '<textarea id="d-' + k + '" data-draft="' + k + '" data-max="' + max + '" style="min-height:' + (k === 'story' ? 110 : 52) + 'px" placeholder="' + esc(ph) + '">' + esc(v) + '</textarea>' +
           '<div class="small draft-count" id="dc-' + k + '">' + draftCount(v, max) + '</div></div>';
       }).join('') +
@@ -758,6 +759,16 @@
       ((c.busy && c.text) || cur.coachNote ? '<pre class="out coach-out" id="coach-out">' + esc(c.busy ? c.text : cur.coachNote) + '</pre>' : '') +
       '</div></div>';
     return h;
+  }
+  function hookIdeasHtml(cur, ready) {
+    if (!ready) return '';
+    const hk = view.hook || {}, ideas = cur.hookIdeas || [];
+    return '<div class="hook-ideas"><button class="btn ghost small" type="button" id="hook-run"' + (hk.busy ? ' disabled' : '') + '>' +
+      (hk.busy ? '생각하는 중…' : '💡 훅 후보 3개 받기') + '</button>' +
+      (hk.busy ? '<pre class="out coach-out" id="hook-live">' + esc(hk.text || '') + '</pre>' : '') +
+      (hk.error ? '<p class="notice">' + esc(hk.error) + '</p>' : '') +
+      (ideas.length && !hk.busy ? '<p class="small muted" style="margin:6px 0 4px">누르면 아래 칸에 들어가요. 그대로 쓰지 말고 내 말로 고쳐 주세요.</p><div class="date-chips">' +
+        ideas.map((x, i) => '<button type="button" class="chip" data-hookpick="' + i + '">' + esc(x) + '</button>').join('') + '</div>' : '') + '</div>';
   }
   function secLine(sec) { return '<strong>' + (sec ? '쇼츠 예상 약 ' + sec + '초' : '아직 원고 내용이 없어요') + '</strong> <span class="muted">· 목표 30~50초</span>'; }
   function draftCount(v, max) {
@@ -810,13 +821,14 @@
       const f = document.getElementById('d-hook'); if (f) f.focus({ preventScroll: true });
     }));
     const runAi = async (key, messages, onDone, temperature) => {
+      const outIds = { coach: 'coach-out', theme: 'theme-live', hook: 'hook-live' };
       const ctrl = new AbortController();
       view[key] = { busy: true, text: '', ctrl };
       render(); keep();
       try {
         const mod = await import('./proofread.js?v=' + APP_VERSION);
         const cfg = Object.assign({}, llm(), { claudeKey: settings.claudeKey });
-        const outId = key === 'coach' ? 'coach-out' : 'theme-live';
+        const outId = outIds[key];
         const text = await mod.generateText(cfg, messages, {
           temperature, signal: ctrl.signal,
           onText: tx => { view[key].text = tx; const o = document.getElementById(outId); if (o) o.textContent = tx; else if (view.name === 'book') render(); }
@@ -838,6 +850,19 @@
     }, 0.5));
     const ts = document.getElementById('theme-stop');
     if (ts) ts.addEventListener('click', () => { if (view.theme && view.theme.ctrl) view.theme.ctrl.abort(); });
+    const hr = document.getElementById('hook-run');
+    if (hr) hr.addEventListener('click', () => {
+      const d = cur();
+      runAi('hook', F.hookMessages(book, live(), d.id), text => {
+        const ideas = F.parseHooks(text);
+        if (!ideas.length) throw new Error('후보를 읽지 못했어요. 다시 눌러 주세요.');
+        d.hookIdeas = ideas; commit();
+      }, 0.8);
+    });
+    app.querySelectorAll('[data-hookpick]').forEach(el => el.addEventListener('click', () => {
+      const d = cur(); d.hook = d.hookIdeas[Number(el.dataset.hookpick)]; commit();
+      const ta = document.getElementById('d-hook'); ta.value = d.hook; ta.dispatchEvent(new Event('input')); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    }));
     const run = document.getElementById('coach-run');
     if (run) run.addEventListener('click', () => { const d = cur(); runAi('coach', F.coachMessages(book, live(), d.id), text => { d.coachNote = text; commit(); }, 0.4); });
     const stop = document.getElementById('coach-stop');
