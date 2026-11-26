@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126k';
+  const APP_VERSION = '20261126l';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -194,7 +194,8 @@
     if (!book || book.id !== id || !/^[a-z0-9]+$/.test(id) || Object.hasOwn(Object.prototype, id) || !day(book.startDate) ||
         (book.finishedDate && !day(book.finishedDate)) || !Array.isArray(book.entries) ||
         !book.entries.every(e => e && day(e.date) && Array.isArray(e.quotes) && e.quotes.every(item) &&
-          Array.isArray(e.applications) && e.applications.every(item))) {
+          Array.isArray(e.applications) && e.applications.every(item)) ||
+        (book.thoughts !== undefined && !(Array.isArray(book.thoughts) && book.thoughts.every(item)))) {
       throw new Error('독서 기록 파일의 형식이 올바르지 않아요.');
     }
   }
@@ -206,7 +207,7 @@
     if (same(remote, base)) return local;
 
     const key = path.at(-1);
-    const itemKey = key === 'entries' ? 'date' : (key === 'quotes' || key === 'applications' ? 'id' : null);
+    const itemKey = key === 'entries' ? 'date' : (key === 'quotes' || key === 'applications' || (key === 'thoughts' && path.length === 1) ? 'id' : null);
     if (itemKey && Array.isArray(local) && Array.isArray(remote) && (base === undefined || Array.isArray(base))) {
       const index = items => new Map((items || []).map(item => [item[itemKey], item]));
       const [before, here, there] = [base, local, remote].map(index);
@@ -288,6 +289,7 @@
 
   function refreshView(id) {
     if (view.name === 'list' || (view.name === 'book' && view.bookId === id)) render();
+    else if (view.name === 'chapter' && view.bookId === id && !(document.activeElement && app.contains(document.activeElement) && document.activeElement.matches('textarea, input'))) render();
   }
 
   async function pullAll() { return runSync(true); }
@@ -383,7 +385,7 @@
 
   function render() {
     if (view.name !== 'video' && videoHandle) { videoHandle.stop(); videoHandle = null; }
-    if (view.name === 'book' && (!books[view.bookId] || books[view.bookId].trashedAt)) view = { name: 'list' };
+    if ((view.name === 'book' || view.name === 'chapter') && (!books[view.bookId] || books[view.bookId].trashedAt)) view = { name: 'list' };
     if (view.name === 'list') renderList();
     else if (view.name === 'newbook') renderBookForm(null);
     else if (view.name === 'editbook') renderBookForm(books[view.bookId]);
@@ -392,6 +394,7 @@
     else if (view.name === 'export') renderExport();
     else if (view.name === 'dayexport') renderDayExport();
     else if (view.name === 'video') renderVideo();
+    else if (view.name === 'chapter') renderChapter();
   }
 
   function sortedBooks(status) {
@@ -582,7 +585,9 @@
 
       '<div class="card"><h2><span class="section-num">2</span>발췌한 문장</h2>' +
       quotesListHtml(entry.quotes, book) +
-      '<button class="btn ghost small" id="add-quote" type="button">+ 문장 추가</button></div>' +
+      '<div class="actions"><button class="btn ghost small" id="add-quote" type="button">+ 문장 추가</button>' +
+      '<button class="btn ghost small" id="bulk-quote" type="button">+ 여러 문장 한 번에</button>' +
+      '<button class="btn ghost small" id="to-chapter" type="button">📖 장별로 모아보기</button></div></div>' +
 
       '<div class="card"><h2><span class="section-num">3</span>오늘 읽은 내용 정리</h2>' +
       '<textarea id="summary" style="min-height:140px" placeholder="오늘 읽은 곳까지, 내 말로 정리해요.">' + esc(entry.summary) + '</textarea></div>' +
@@ -639,6 +644,8 @@
       render();
       const ta = app.querySelector('#quotes textarea[data-qf="text"]'); if (ta) ta.focus();
     });
+    document.getElementById('bulk-quote').addEventListener('click', () => bulkModal(book, { date: date, done: d => go({ name: 'book', bookId: book.id, date: d }) }));
+    document.getElementById('to-chapter').addEventListener('click', () => go({ name: 'chapter', bookId: book.id }));
     app.querySelectorAll('[data-qopen]').forEach(el => el.addEventListener('click', () => {
       const i = Number(el.dataset.qopen);
       view.openQuote = view.openQuote === i ? null : i;
@@ -940,21 +947,25 @@
     return String(text || '').split('\n').map(line => {
       if (!line.trim()) return null;
       const level = /^(\s+|[-·*└ㄴ]\s*)/.test(line) ? 2 : 1;
-      const title = line.replace(/^[\s\-·*└ㄴ]+/, '').trim();
+      let title = line.replace(/^[\s\-·*└ㄴ]+/, '').trim();
+      let page = '';
+      const pm = title.match(/\s*\|\s*[pP]?\.?\s*(\d+)\s*쪽?\s*$/);
+      if (pm) { page = pm[1]; title = title.slice(0, pm.index).trim(); }
       if (!title) return null;
       const k = pool.findIndex(t => t.title === title);
       const id = k >= 0 ? pool.splice(k, 1)[0].id : uid();
-      return { id, title, level };
+      return page ? { id, title, level, page } : { id, title, level };
     }).filter(Boolean);
   }
   function tocHtml(book) {
     const toc = book.toc || [];
     let h = '<div class="card toc-card" id="toc"><div class="quote-head"><h2 style="margin:0">📑 목차</h2>' +
-      (!view.tocEdit ? '<button class="btn ghost small" type="button" id="toc-edit">' + (toc.length ? '목차 고치기' : '목차 적기') + '</button>' : '') + '</div>';
+      (!view.tocEdit ? '<span class="toc-btns">' + (toc.length ? '<button class="btn small" type="button" id="toc-chapter">📖 장별로 모아보기</button>' : '') +
+        '<button class="btn ghost small" type="button" id="toc-edit">' + (toc.length ? '목차 고치기' : '목차 적기') + '</button></span>' : '') + '</div>';
     if (view.tocEdit) {
-      return h + '<p class="small muted">한 줄에 하나씩 적어요. 앞에 띄어쓰기나 - 를 붙이면 하위 목차가 돼요. 책 목차를 복사해 붙여넣어도 돼요.</p>' +
+      return h + '<p class="small muted">한 줄에 하나씩 적어요. 앞에 띄어쓰기나 - 를 붙이면 하위 목차가 돼요. 책 목차를 복사해 붙여넣어도 돼요. 끝에 <strong>| 시작 쪽수</strong>를 붙이면(예: 1장 읽는 뇌 | 15) 쪽수로 문장을 자동 연결할 수 있어요.</p>' +
         '<textarea id="toc-text" style="min-height:180px" placeholder="1장 왜 읽어야 하는가\n - 읽는 뇌\n - 읽기의 위기\n2장 어떻게 읽을 것인가">' +
-        esc(toc.map(t => (t.level === 2 ? '  - ' : '') + t.title).join('\n')) + '</textarea>' +
+        esc(toc.map(t => (t.level === 2 ? '  - ' : '') + t.title + (t.page ? ' | ' + t.page : '')).join('\n')) + '</textarea>' +
         '<div class="actions"><button class="btn small" type="button" id="toc-save">저장</button><button class="btn ghost small" type="button" id="toc-cancel">취소</button></div></div>';
     }
     if (!toc.length) return h + '<p class="small muted" style="margin:8px 0 0">목차를 적어두면 발췌한 문장이 어느 목차에 속하는지 고를 수 있어요.</p></div>';
@@ -996,6 +1007,8 @@
       view.tocEdit = false; commit(); render();
       document.getElementById('toc').scrollIntoView({ block: 'start' });
     });
+    const tch = document.getElementById('toc-chapter');
+    if (tch) tch.addEventListener('click', () => go({ name: 'chapter', bookId: book.id }));
     const cc = document.getElementById('toc-cancel');
     if (cc) cc.addEventListener('click', () => { view.tocEdit = false; render(); });
     app.querySelectorAll('[data-tocexp]').forEach(el => el.addEventListener('click', () => {
@@ -1011,6 +1024,255 @@
       const [d, i] = el.dataset.tocq.split('|');
       go({ name: 'book', bookId: book.id, date: d, openQuote: Number(i), qpage: Math.floor(Number(i) / QUOTES_PER_PAGE), tocOpen: view.tocOpen, tocExp: view.tocExp });
       setTimeout(() => { const r = app.querySelector('[data-qopen="' + i + '"]'); if (r) r.scrollIntoView({ block: 'center' }); }, 0);
+    }));
+  }
+
+  // ---------- 장별 모아보기 ----------
+  // 여러 날에 나눠 적은 발췌 문장을 장(상위 목차)별로 한곳에 모은다. 문장은 그대로 그 날 기록에 남아 있어서
+  // 하루 포스팅은 여전히 그 날 기록만 쓴다. 문장 옆 "내 생각"은 quote.reason(고른 이유)과 같은 칸이다.
+  // 여러 문장을 잇는 생각은 book.thoughts = [{ id, tocId, text, quoteIds: [], date }]에 둔다.
+  function tocGroups(book) {
+    const groups = [];
+    (book.toc || []).forEach(t => { if (t.level === 2 && groups.length) groups[groups.length - 1].kids.push(t); else groups.push({ item: t, kids: [] }); });
+    return groups;
+  }
+  function chapterIdOf(book, tocId) {
+    if (!tocItem(book, tocId)) return 'none';
+    const g = tocGroups(book).find(g => g.item.id === tocId || g.kids.some(k => k.id === tocId));
+    return g ? g.item.id : 'none';
+  }
+  function pageNum(p) { const m = String(p || '').match(/\d+/); return m ? Number(m[0]) : null; }
+  function filledQuote(q) { return (q.text && q.text.trim()) || (q.reason && q.reason.trim()); }
+  function bookSessions(book) {
+    return (book.entries || []).filter(e => !entryIsEmpty(e)).map(e => e.date).sort();
+  }
+  function chapterQuotes(book, chapId) {
+    const out = [];
+    (book.entries || []).forEach(e => (e.quotes || []).forEach((q, i) => {
+      if (filledQuote(q) && chapterIdOf(book, q.tocId) === chapId) out.push({ date: e.date, i, q });
+    }));
+    // 쪽수 순서로, 쪽수가 없으면 적은 날 순서로
+    return out.sort((a, b) => {
+      const pa = pageNum(a.q.page), pb = pageNum(b.q.page);
+      if (pa != null && pb != null && pa !== pb) return pa - pb;
+      return a.date.localeCompare(b.date) || a.i - b.i;
+    });
+  }
+  function findQuote(book, id) {
+    for (const e of book.entries || []) { const q = (e.quotes || []).find(x => x.id === id); if (q) return { e, q }; }
+    return null;
+  }
+
+  // 여러 문장 한 번에 넣기. 빈 줄로 문장을 나누고, →(또는 생각:)으로 시작하는 줄은 그 문장에 대한 내 생각이 된다.
+  function parseBulkQuotes(text) {
+    const thoughtRe = /^\s*(→|->|=>|생각\s*[:：])\s*/;
+    return String(text || '').replace(/\r/g, '').split(/\n\s*\n/).map(block => {
+      const lines = block.split('\n');
+      const said = [], thought = [];
+      let page = '';
+      lines.forEach(line => {
+        if (thoughtRe.test(line)) thought.push(line.replace(thoughtRe, ''));
+        else if (thought.length) thought.push(line);
+        else said.push(line);
+      });
+      let body = said.join('\n').trim();
+      const head = body.match(/^\(?\s*(?:[pP]\.?\s*(\d+)|(\d+)\s*쪽)\s*\)?\s*[.:)\]\-–]?\s+/);
+      if (head) { page = 'p' + (head[1] || head[2]); body = body.slice(head[0].length).trim(); }
+      else {
+        const tail = body.match(/\s*\(\s*(?:[pP]\.?\s*)?(\d+)\s*쪽?\s*\)\s*$|\s+[pP]\.?\s*(\d+)\s*$|\s+(\d+)\s*쪽\s*$/);
+        if (tail) { page = 'p' + (tail[1] || tail[2] || tail[3]); body = body.slice(0, tail.index).trim(); }
+      }
+      return { text: body, page, reason: thought.join('\n').trim() };
+    }).filter(x => x.text);
+  }
+  function tocOptions(book, selected, emptyLabel) {
+    return '<option value="">' + emptyLabel + '</option>' + (book.toc || []).map(t =>
+      '<option value="' + esc(t.id) + '"' + (t.id === selected ? ' selected' : '') + '>' + (t.level === 2 ? '　└ ' : '') + esc(t.title) + '</option>').join('');
+  }
+  function bulkModal(book, opts) {
+    const date = opts.date || todayStr();
+    const w = showModal('<h2>여러 문장 한 번에 넣기</h2>' +
+      '<p class="small muted">문장 사이는 빈 줄로 나눠요. 문장 아래 <strong>→</strong> 로 시작하는 줄은 그 문장에 대한 내 생각으로 들어가요. 앞에 <strong>p45</strong>나 <strong>45쪽</strong>을 적으면 쪽수가 돼요.</p>' +
+      '<textarea id="m-bulk" style="min-height:220px" placeholder="p45 마음에 남은 문장을 그대로 옮겨요.\n→ 왜 이 문장이 남았는지 내 생각\n\np47 다음 문장\n→ 생각은 나중에 적어도 돼요"></textarea>' +
+      '<div class="bulk-opts"><label>어느 날 읽은 문장인가요<input type="date" id="m-date" value="' + esc(date) + '"></label>' +
+      '<label>목차<select id="m-toc">' + tocOptions(book, opts.tocId || '', '목차 없이 넣기') + '</select></label></div>' +
+      '<p class="small" id="m-count" aria-live="polite">아직 넣을 문장이 없어요</p>' +
+      '<div class="actions"><button class="btn" type="button" data-m="ok">넣기</button><button class="btn ghost" type="button" data-m="close">취소</button></div>',
+      (act, close, wrap) => {
+        if (act !== 'ok') { close(); return; }
+        const items = parseBulkQuotes(wrap.querySelector('#m-bulk').value);
+        const d = wrap.querySelector('#m-date').value;
+        if (!items.length) { alert('넣을 문장이 없어요.'); return; }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { alert('날짜를 골라 주세요.'); return; }
+        const tocId = wrap.querySelector('#m-toc').value;
+        const e = ensureEntry(book, d);
+        items.forEach(x => e.quotes.push({ id: uid(), text: x.text, page: x.page, reason: x.reason, tocId }));
+        saveBook(book); close();
+        setStatus(items.length + '개 문장을 ' + fmtDate(d) + ' 기록에 넣었어요');
+        if (opts.done) opts.done(d, tocId); else render();
+      });
+    const ta = w.querySelector('#m-bulk'), cnt = w.querySelector('#m-count');
+    ta.addEventListener('input', () => {
+      const items = parseBulkQuotes(ta.value);
+      cnt.textContent = items.length ? '문장 ' + items.length + '개 · 내 생각 ' + items.filter(x => x.reason).length + '개 · 쪽수 ' + items.filter(x => x.page).length + '개' : '아직 넣을 문장이 없어요';
+    });
+    ta.focus();
+  }
+
+  function autoGrow(root) {
+    (root || app).querySelectorAll('textarea.grow').forEach(ta => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; });
+  }
+
+  function renderChapter() {
+    const book = books[view.bookId];
+    const groups = tocGroups(book);
+    const sessions = bookSessions(book);
+    const counts = {};
+    (book.entries || []).forEach(e => (e.quotes || []).forEach(q => { if (filledQuote(q)) { const c = chapterIdOf(book, q.tocId); counts[c] = (counts[c] || 0) + 1; } }));
+    let chap = view.chap;
+    if (!chap || (chap !== 'none' && !groups.some(g => g.item.id === chap))) {
+      const firstWith = groups.find(g => counts[g.item.id]);
+      chap = firstWith ? firstWith.item.id : (counts.none || !groups.length ? 'none' : groups[0].item.id);
+      view.chap = chap;
+    }
+    const group = groups.find(g => g.item.id === chap);
+    const list = chapterQuotes(book, chap);
+    const numOf = {}; list.forEach((x, k) => { numOf[x.q.id] = k + 1; });
+    const thoughts = (book.thoughts || []).filter(t => t.tocId === chap);
+    const thoughtsOf = id => thoughts.filter(t => (t.quoteIds || []).includes(id));
+    const shortDate = d => { const x = parseDay(d); return (x.getMonth() + 1) + '/' + x.getDate(); };
+    const preview = (s, n) => { const f = String(s || '').trim().split('\n')[0]; return f.length > n ? f.slice(0, n) + '…' : f; };
+    const hasTocPages = (book.toc || []).some(t => t.page);
+
+    const chips = groups.map(g => '<button type="button" class="chip' + (g.item.id === chap ? ' on' : '') + '" data-chap="' + esc(g.item.id) + '">' +
+      esc(shortToc(g.item.title)) + (counts[g.item.id] ? ' <span class="toc-count">' + counts[g.item.id] + '</span>' : '') + '</button>').join('') +
+      (counts.none || !groups.length ? '<button type="button" class="chip' + (chap === 'none' ? ' on' : '') + '" data-chap="none">목차 미지정' + (counts.none ? ' <span class="toc-count">' + counts.none + '</span>' : '') + '</button>' : '');
+
+    // 하위 목차가 있으면 그 아래로 묶어서 보여준다
+    const sections = [];
+    if (group) {
+      const own = list.filter(x => x.q.tocId === group.item.id);
+      if (own.length) sections.push({ title: '', items: own });
+      group.kids.forEach(k => { const its = list.filter(x => x.q.tocId === k.id); if (its.length) sections.push({ title: k.title, items: its }); });
+    } else sections.push({ title: '', items: list });
+
+    const pairHtml = x => {
+      const q = x.q, id = q.id, n = numOf[id], linked = thoughtsOf(id);
+      const sNo = sessions.indexOf(x.date) + 1;
+      return '<div class="pair" id="pair-' + esc(id) + '">' +
+        '<div class="pair-q">' +
+        '<div class="pair-meta"><span class="qnum">' + n + '</span>' +
+        (q.page ? '<span class="qpage">' + esc(q.page) + '</span>' : '') +
+        '<button type="button" class="linkish small" data-goday="' + x.date + '|' + x.i + '">' + (sNo ? sNo + '번째 날 · ' : '') + shortDate(x.date) + '</button>' +
+        '<select class="pair-toc" data-pq="' + esc(id) + '" data-pf="tocId" aria-label="목차 바꾸기">' + tocOptions(book, q.tocId || '', '목차 미지정') + '</select></div>' +
+        '<textarea class="grow pair-text" data-pq="' + esc(id) + '" data-pf="text" rows="1" aria-label="발췌 문장 ' + n + '">' + esc(q.text) + '</textarea>' +
+        '</div>' +
+        '<div class="pair-t' + (q.reason && q.reason.trim() ? '' : ' blank') + '">' +
+        '<div class="pair-meta"><strong class="small">내 생각</strong></div>' +
+        '<textarea class="grow" data-pq="' + esc(id) + '" data-pf="reason" rows="1" placeholder="이 문장에서 든 생각을 적어요" aria-label="문장 ' + n + '에 대한 내 생각">' + esc(q.reason) + '</textarea>' +
+        (linked.length ? '<div class="pair-links">' + linked.map(t => '<button type="button" class="link-chip" data-gothought="' + esc(t.id) + '">🔗 ' + esc(preview(t.text, 24) || '(비어 있는 생각)') + '</button>').join('') + '</div>' : '') +
+        '</div></div>';
+    };
+
+    const thoughtHtml = (t, k) => {
+      const ids = (t.quoteIds || []).filter(id => numOf[id]);
+      const editing = view.linkEdit === t.id;
+      return '<div class="thought" id="thought-' + esc(t.id) + '">' +
+        '<div class="quote-head"><h3>잇는 생각 ' + (k + 1) + '</h3><button class="btn danger small" type="button" data-tdel="' + esc(t.id) + '">지우기</button></div>' +
+        '<textarea class="grow" data-tid="' + esc(t.id) + '" rows="3" placeholder="여러 문장을 함께 보며 든 생각을 적어요">' + esc(t.text) + '</textarea>' +
+        '<div class="thought-links"><span class="small muted">연결한 문장</span>' +
+        (editing
+          ? list.map(x => '<button type="button" class="num-chip' + (ids.includes(x.q.id) ? ' on' : '') + '" data-tlink="' + esc(t.id) + '|' + esc(x.q.id) + '" title="' + esc(preview(x.q.text, 40)) + '" aria-pressed="' + ids.includes(x.q.id) + '">' + numOf[x.q.id] + '</button>').join('') +
+            '<button type="button" class="btn small" data-tedit="">완료</button>'
+          : (ids.length ? ids.sort((a, b) => numOf[a] - numOf[b]).map(id => '<button type="button" class="num-chip on" data-gopair="' + esc(id) + '" title="' + esc(preview(findQuote(book, id).q.text, 40)) + '">' + numOf[id] + '</button>').join('') : '<span class="small muted">아직 없어요</span>') +
+            (list.length ? '<button type="button" class="btn ghost small" data-tedit="' + esc(t.id) + '">문장 고르기</button>' : '')) +
+        '</div></div>';
+    };
+
+    app.innerHTML =
+      '<button class="back" type="button" id="back">← ' + esc(book.title) + '</button>' +
+      '<h1>장별로 모아보기</h1>' +
+      '<p class="muted small">여러 날 나눠 적은 발췌 문장을 장마다 한곳에 모아요. 문장 옆에 내 생각이 바로 붙어 있고, 여기서 고치면 그 날 기록에도 그대로 반영돼요. 하루 포스팅은 여전히 그 날 기록만 써요.</p>' +
+      (groups.length ? '' : '<p class="notice">책 화면의 📑 목차에 장 제목을 적으면 장마다 나눠 볼 수 있어요. 지금은 모든 문장을 한곳에 보여줘요.</p>') +
+      '<div class="chap-chips">' + chips + '</div>' +
+      '<div class="card chap-card">' +
+      '<div class="quote-head"><h2 style="margin:0">' + (group ? esc(group.item.title) : '목차 미지정') + '</h2>' +
+      '<span class="small muted">문장 ' + list.length + '개 · 생각 ' + list.filter(x => x.q.reason && x.q.reason.trim()).length + '개</span></div>' +
+      '<div class="actions"><button class="btn small" type="button" id="bulk-add">+ 여러 문장 한 번에 넣기</button>' +
+      (chap === 'none' && list.length && hasTocPages ? '<button class="btn ghost small" type="button" id="auto-link">쪽수로 목차 자동 연결</button>' : '') + '</div>' +
+      (chap === 'none' && list.length ? '<p class="small muted">목차가 아직 없는 문장이에요. 문장마다 위쪽 칸에서 목차를 고르면 그 장으로 옮겨가요.' +
+        (hasTocPages ? '' : ' 목차 줄 끝에 <strong>| 시작 쪽수</strong>를 적어두면(예: <code>1장 읽는 뇌 | 15</code>) 쪽수로 한 번에 연결할 수 있어요.') + '</p>' : '') +
+      (list.length ? sections.map(s => (s.title ? '<h3 class="pair-sec">└ ' + esc(s.title) + '</h3>' : '') + s.items.map(pairHtml).join('')).join('')
+        : '<p class="empty" style="padding:24px 0">이 장에 연결된 문장이 아직 없어요.</p>') +
+      '</div>' +
+      (chap !== 'none' || list.length ? '<div class="card"><h2>🔗 여러 문장을 잇는 생각</h2>' +
+        '<p class="small muted">문장 여러 개를 함께 보다가 든 생각을 적고, 어떤 문장들에서 나온 생각인지 번호로 연결해요. 연결한 문장 옆에도 이 생각이 보여요.</p>' +
+        thoughts.map(thoughtHtml).join('') +
+        '<button class="btn ghost small" type="button" id="add-thought">+ 잇는 생각 추가</button></div>' : '');
+
+    autoGrow();
+    document.getElementById('back').addEventListener('click', () => go({ name: 'book', bookId: book.id }));
+    const keepScroll = fn => { const y = window.scrollY; fn(); window.scrollTo(0, y); };
+    app.querySelectorAll('[data-chap]').forEach(el => el.addEventListener('click', () => { view.chap = el.dataset.chap; view.linkEdit = null; render(); }));
+    document.getElementById('bulk-add').addEventListener('click', () => bulkModal(book, {
+      tocId: chap === 'none' ? '' : chap,
+      done: (d, tocId) => { view.chap = chapterIdOf(book, tocId); render(); }
+    }));
+    const al = document.getElementById('auto-link');
+    if (al) al.addEventListener('click', () => {
+      const marks = (book.toc || []).filter(t => t.page).map(t => ({ id: t.id, page: Number(t.page) }));
+      const plan = [];
+      list.forEach(x => {
+        const p = pageNum(x.q.page); if (p == null) return;
+        let best = null; marks.forEach(m => { if (m.page <= p && (!best || m.page >= best.page)) best = m; });
+        if (best) plan.push({ q: x.q, id: best.id });
+      });
+      if (!plan.length) { alert('쪽수로 찾을 수 있는 문장이 없어요. 문장의 쪽수나 목차의 시작 쪽수를 확인해 주세요.'); return; }
+      if (!confirm('문장 ' + list.length + '개 중 ' + plan.length + '개를 쪽수에 맞는 목차에 연결할까요? 문장 내용은 바뀌지 않아요.')) return;
+      plan.forEach(x => { x.q.tocId = x.id; });
+      saveBook(book); render();
+    });
+    app.querySelectorAll('[data-pq]').forEach(el => {
+      const hit = findQuote(book, el.dataset.pq); if (!hit) return;
+      const f = el.dataset.pf;
+      if (f === 'tocId') el.addEventListener('change', () => { hit.q.tocId = el.value; saveBook(book); keepScroll(render); });
+      else el.addEventListener('input', () => {
+        hit.q[f] = el.value; saveBook(book);
+        el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px';
+        if (f === 'reason') el.closest('.pair-t').classList.toggle('blank', !el.value.trim());
+      });
+    });
+    app.querySelectorAll('[data-goday]').forEach(el => el.addEventListener('click', () => {
+      const [d, i] = el.dataset.goday.split('|');
+      go({ name: 'book', bookId: book.id, date: d, openQuote: Number(i), qpage: Math.floor(Number(i) / QUOTES_PER_PAGE) });
+      setTimeout(() => { const r = app.querySelector('[data-qopen="' + i + '"]'); if (r) r.scrollIntoView({ block: 'center' }); }, 0);
+    }));
+    const flash = el => { if (!el) return; el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); };
+    app.querySelectorAll('[data-gothought]').forEach(el => el.addEventListener('click', () => flash(document.getElementById('thought-' + el.dataset.gothought))));
+    app.querySelectorAll('[data-gopair]').forEach(el => el.addEventListener('click', () => flash(document.getElementById('pair-' + el.dataset.gopair))));
+    const at = document.getElementById('add-thought');
+    if (at) at.addEventListener('click', () => {
+      book.thoughts = book.thoughts || [];
+      const t = { id: uid(), tocId: chap, text: '', quoteIds: [], date: todayStr() };
+      book.thoughts.push(t); view.linkEdit = list.length ? t.id : null; saveBook(book); keepScroll(render);
+      const ta = app.querySelector('[data-tid="' + t.id + '"]'); if (ta) { ta.focus(); ta.scrollIntoView({ block: 'center' }); }
+    });
+    app.querySelectorAll('[data-tid]').forEach(el => el.addEventListener('input', () => {
+      const t = (book.thoughts || []).find(x => x.id === el.dataset.tid); if (!t) return;
+      t.text = el.value; saveBook(book); el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px';
+    }));
+    app.querySelectorAll('[data-tdel]').forEach(el => el.addEventListener('click', () => {
+      if (!confirm('이 생각을 지울까요? 연결한 문장은 그대로 남아요.')) return;
+      book.thoughts = (book.thoughts || []).filter(x => x.id !== el.dataset.tdel); saveBook(book); keepScroll(render);
+    }));
+    app.querySelectorAll('[data-tedit]').forEach(el => el.addEventListener('click', () => { view.linkEdit = el.dataset.tedit || null; keepScroll(render); }));
+    app.querySelectorAll('[data-tlink]').forEach(el => el.addEventListener('click', () => {
+      const [tid, qid] = el.dataset.tlink.split('|');
+      const t = (book.thoughts || []).find(x => x.id === tid); if (!t) return;
+      t.quoteIds = Array.isArray(t.quoteIds) ? t.quoteIds : [];
+      const k = t.quoteIds.indexOf(qid);
+      if (k >= 0) t.quoteIds.splice(k, 1); else t.quoteIds.push(qid);
+      saveBook(book); keepScroll(render);
     }));
   }
 
@@ -1053,7 +1315,7 @@
         book.toc.map(t => '<option value="' + esc(t.id) + '"' + (t.id === q.tocId ? ' selected' : '') + '>' + (t.level === 2 ? '　└ ' : '') + esc(t.title) + '</option>').join('') + '</select>' :
         '<p class="small muted" style="margin:0">위 📑 목차 칸에 목차를 적으면 여기서 고를 수 있어요.</p>') +
       '<label>쪽수 (선택)</label><input type="text" data-qi="' + i + '" data-qf="page" value="' + esc(q.page) + '">' +
-      '<label>이 문장을 고른 이유</label>' +
+      '<label>이 문장을 고른 이유 · 내 생각</label>' +
       '<textarea data-qi="' + i + '" data-qf="reason" placeholder="왜 이 문장이 남았나요?">' + esc(q.reason) + '</textarea>' +
       '</div>';
   }
