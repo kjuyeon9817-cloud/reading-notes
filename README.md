@@ -121,3 +121,9 @@ LM Studio 로컬 AI로 Threads·X 글을 만드는 별도 페이지예요. `stan
 - 원고는 `entry.drafts = [{ id, theme, starIds, hook, story, action, ask, coachNote }]`. 예전 `entry.draft`는 고칠 때 자동으로 옮겨져요.
 - 🧩 주제로 묶기: AI가 문장 묶음 2~3개와 제목 후보만 제안(`F.themeMessages`, `F.parseThemes`), 본문은 쓰지 않아요.
 - 포스팅용 글에서 원고를 고르면 블로그(원고 중심)·Threads·쇼츠·더빙 영상이 그 원고 하나로 만들어져요. 타깃 맞춤 재구성에 네이버 블로그 추가.
+
+## ✨ AI 재구성 (`F.restyleMessages`, `entry.restyledBy`)
+
+내 발췌·고른 이유·정리·적용·원고만 재료로 플랫폼별로 처음부터 끝까지 다시 써요: 네이버 블로그, Threads, 인스타그램 캡션, 쇼츠·릴스 대본, 유튜브 롱폼 대본, X.
+"모든 플랫폼 한 번에"로 차례로 만들고, 결과는 플랫폼별로 저장·편집돼요. 대본은 바로 더빙 영상으로 이어져요.
+지어내기 금지, 책 문장 원문 유지, 1인칭 규칙은 그대로예요.

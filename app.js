@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126j';
+  const APP_VERSION = '20261126k';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -1224,43 +1224,62 @@
 
   // ---------- 어투·목표 독자 맞춤 재구성 ----------
   function rsOpts() {
-    return Object.assign({ target: '', tone: 'friendly', platform: 'threads', format: 'short' }, state.restyle || {});
+    return Object.assign({ target: '', tone: 'friendly', platform: 'blog', format: 'short' }, state.restyle || {});
   }
   function setRs(patch) { state.restyle = Object.assign(rsOpts(), patch); persist(); }
+  const RS_ALL = ['blog', 'threads', 'insta', 'shorts', 'longform'];
+
+  // 플랫폼별 결과: entry.restyledBy[platform]. 예전 entry.restyled 하나짜리도 보여준다.
+  function rsSaved(entry, platform) {
+    const by = entry.restyledBy || {};
+    if (by[platform]) return by[platform];
+    return entry.restyled && entry.restyled.platform === platform ? entry.restyled : null;
+  }
+  function rsStore(entry, data) {
+    entry.restyledBy = Object.assign({}, entry.restyledBy || {}, { [data.platform]: data });
+    if (entry.restyled && entry.restyled.platform === data.platform) delete entry.restyled;
+  }
 
   function restyleHtml(entry) {
     const o = rsOpts();
     const st = view.rs || {};
     const l = llm();
-    const seg = (key, items) => '<div class="date-chips">' + Object.entries(items).map(([k, v]) =>
+    const P = F.RS_PLATFORMS[o.platform] || F.RS_PLATFORMS.blog;
+    const seg = (key, items) => '<div class="date-chips wrap">' + Object.entries(items).map(([k, v]) =>
       '<button type="button" class="chip' + (o[key] === k ? ' on' : '') + '" data-rs="' + key + '" data-v="' + k + '">' + esc(v) + '</button>').join('') + '</div>';
-    const saved = entry.restyled;
-    let h = '<p class="small muted">내 기록을 재료로, 고른 어투와 목표 독자에 맞춰 글을 다시 구성해요. 기록에 없는 경험이나 숫자는 지어내지 않고, 책 문장은 그대로 둬요. 결과는 직접 고칠 수 있어요.</p>' +
+    const saved = rsSaved(entry, o.platform);
+    const made = Object.keys(F.RS_PLATFORMS).filter(k => rsSaved(entry, k));
+    let h = '<p class="small muted">내 발췌와 생각만 재료로, 플랫폼마다 잘 읽히는 모양으로 처음부터 끝까지 다시 구성해요. 기록에 없는 경험이나 숫자는 지어내지 않고, 책 문장은 그대로 둬요. 결과는 직접 고칠 수 있어요.</p>' +
       '<label for="rs-target">목표 독자</label>' +
-      '<textarea id="rs-target" style="min-height:60px" placeholder="예: 하루하루 버티느라 자기 자신을 돌볼 틈이 없는 20~30대">' + esc(o.target) + '</textarea>' +
+      '<textarea id="rs-target" style="min-height:60px" placeholder="예: 사람 때문에 지친 20~30대 직장인">' + esc(o.target) + '</textarea>' +
       '<label>어투</label>' + seg('tone', Object.fromEntries(Object.entries(F.RS_TONES).map(([k, v]) => [k, v.label]))) +
-      '<label>플랫폼</label>' + seg('platform', { threads: 'Threads (500자)', x: 'X (280자)', blog: '네이버 블로그' }) +
-      '<label>분량</label>' + seg('format', Object.fromEntries(Object.entries(F.RS_FORMATS).map(([k, v]) => [k, v.label + ' ' + v.count]))) +
+      '<label>플랫폼</label>' + seg('platform', Object.fromEntries(Object.entries(F.RS_PLATFORMS).map(([k, v]) => [k, (made.includes(k) ? '✓ ' : '') + v.name]))) +
+      (P.formats ? '<label>분량</label>' + seg('format', Object.fromEntries(Object.entries(F.RS_FORMATS).map(([k, v]) => [k, v.label + ' ' + v.count]))) : '') +
       '<p class="small muted">사용 중: ' + (l.provider === 'lmstudio' ? 'LM Studio · ' + esc(l.lmModel || '모델 미선택') : l.provider === 'ollama' ? 'Ollama · ' + esc(l.ollamaModel || '모델 미선택') : 'Claude') +
       ' (<a href="#" data-go="settings">바꾸기</a>)</p>' +
       '<div class="actions">' + (st.busy
-        ? '<button class="btn" type="button" disabled>만드는 중…</button><button class="btn danger" type="button" id="rs-stop">⏹ 중단</button>'
-        : '<button class="btn" type="button" id="rs-run"' + (llmReady() ? '' : ' disabled') + '>' + (saved ? '다시 만들기' : '만들기') + '</button>') + '</div>' +
+        ? '<button class="btn" type="button" disabled>' + esc(st.label || '만드는 중…') + '</button><button class="btn danger" type="button" id="rs-stop">⏹ 중단</button>'
+        : '<button class="btn" type="button" id="rs-run"' + (llmReady() ? '' : ' disabled') + '>' + esc(P.name) + ' ' + (saved ? '다시 만들기' : '만들기') + '</button>' +
+          '<button class="btn ghost" type="button" id="rs-all"' + (llmReady() ? '' : ' disabled') + '>모든 플랫폼 한 번에</button>') + '</div>' +
       (!llmReady() ? '<p class="notice">설정에서 AI 모델을 먼저 골라주세요.</p>' : '') +
       (st.error ? '<p class="notice">' + esc(st.error) + '</p>' : '');
     if (st.busy) {
       h += '<p class="small" id="rs-think">' + (st.reasoning ? '🧠 모델이 깊게 생각하는 중… (' + st.reasoning + '자 추론)' : '') + '</p>' +
         '<pre class="out" id="rs-live">' + esc(st.raw || '') + '</pre>';
     } else if (saved && saved.posts && saved.posts.length) {
-      const lim = (F.RS_PLATFORMS[saved.platform] || F.RS_PLATFORMS.threads).limit;
-      h += '<div class="quote-head" style="margin-top:14px"><span class="small muted">' + saved.posts.length + '개 · ' +
-        esc((F.RS_TONES[saved.tone] || {}).label || '') + ' · ' + esc((F.RS_PLATFORMS[saved.platform] || F.RS_PLATFORMS.threads).name) + '</span>' +
+      const SP = F.RS_PLATFORMS[saved.platform] || P;
+      const lim = SP.limit, isScript = saved.platform === 'shorts' || saved.platform === 'longform';
+      const total = saved.posts.reduce((n, x) => n + Array.from(x).length, 0);
+      h += '<div class="quote-head" style="margin-top:14px"><span class="small muted">' + esc(SP.name) + ' · ' + saved.posts.length + (SP.unit || '개') + ' · ' +
+        esc((F.RS_TONES[saved.tone] || {}).label || '') + (isScript ? ' · 예상 약 ' + Math.round(total / 5) + '초' : '') + '</span>' +
         '<button class="btn small" type="button" data-rscopy="all">전체 복사</button></div>' +
+        (isScript ? '<div class="actions"><button class="btn arrow small" type="button" id="rs-video">🎬 이 대본으로 더빙 영상 만들기</button></div>' : '') +
         saved.posts.map((p, i) => {
           const n = Array.from(p).length;
-          return '<div class="scene"><div class="quote-head"><span class="small ' + (n > lim ? 'over' : 'muted') + '" id="rs-count-' + i + '">' + (i + 1) + '/' + saved.posts.length + ' · ' + n + '/' + lim + '자' + (n > lim ? ' · 너무 길어요' : '') + '</span>' +
+          return '<div class="scene"><div class="quote-head"><span class="small ' + (n > lim ? 'over' : 'muted') + '" id="rs-count-' + i + '">' +
+            (saved.posts.length > 1 ? (i + 1) + '/' + saved.posts.length + ' · ' : '') + n + '/' + lim + '자' + (n > lim ? ' · 너무 길어요' : '') + '</span>' +
             '<button class="btn small" type="button" data-rscopy="' + i + '">복사</button></div>' +
-            '<textarea class="rs-post" data-rspost="' + i + '">' + esc(p) + '</textarea></div>';
+            '<textarea class="rs-post' + (saved.posts.length === 1 ? ' tall' : '') + '" data-rspost="' + i + '">' + esc(p) + '</textarea></div>';
         }).join('');
     }
     return h;
@@ -1270,42 +1289,56 @@
     const ta = document.getElementById('rs-target');
     if (ta) ta.addEventListener('input', e => setRs({ target: e.target.value }));
     app.querySelectorAll('[data-rs]').forEach(b => b.addEventListener('click', () => { setRs({ [b.dataset.rs]: b.dataset.v }); render(); }));
-    const run = document.getElementById('rs-run');
-    if (run) run.addEventListener('click', async () => {
+    const generate = async (platforms) => {
       const o = rsOpts();
       if (!o.target.trim() && !confirm('목표 독자를 비워두고 만들까요?')) return;
       const ctrl = new AbortController();
       view.rs = { busy: true, raw: '', reasoning: 0, ctrl };
-      render();
       try {
         const mod = await import('./proofread.js?v=' + APP_VERSION);
         const cfg = Object.assign({}, llm(), { claudeKey: settings.claudeKey });
-        const text = await mod.generateText(cfg, F.restyleMessages(book, entry, o), {
-          temperature: 0.7, signal: ctrl.signal,
-          onText: tx => { view.rs.raw = tx; const el = document.getElementById('rs-live'); if (el) { el.textContent = tx; el.scrollTop = el.scrollHeight; } },
-          onReasoning: n => { view.rs.reasoning = n; const el = document.getElementById('rs-think'); if (el) el.textContent = '🧠 모델이 깊게 생각하는 중… (' + n + '자 추론)'; }
-        });
-        const posts = F.parsePosts(text);
-        if (!posts.length) throw new Error('모델이 빈 답을 줬어요. 다시 만들어 주세요.');
-        entry.restyled = { platform: o.platform, format: o.format, tone: o.tone, target: o.target, posts, at: new Date().toISOString() };
-        saveBook(book);
+        for (let k = 0; k < platforms.length; k++) {
+          const pf = platforms[k], oo = Object.assign({}, o, { platform: pf });
+          view.rs = { busy: true, raw: '', reasoning: 0, ctrl, label: F.RS_PLATFORMS[pf].name + ' 만드는 중…' + (platforms.length > 1 ? ' (' + (k + 1) + '/' + platforms.length + ')' : '') };
+          setRs({ platform: pf });
+          render();
+          const text = await mod.generateText(cfg, F.restyleMessages(book, entry, oo), {
+            temperature: 0.7, signal: ctrl.signal,
+            onText: tx => { view.rs.raw = tx; const el = document.getElementById('rs-live'); if (el) { el.textContent = tx; el.scrollTop = el.scrollHeight; } },
+            onReasoning: n => { view.rs.reasoning = n; const el = document.getElementById('rs-think'); if (el) el.textContent = '🧠 모델이 깊게 생각하는 중… (' + n + '자 추론)'; }
+          });
+          const P = F.RS_PLATFORMS[pf];
+          let posts = F.parsePosts(text);
+          if (!P.multi) posts = [posts.join('\n\n')];
+          if (!posts.length || !posts[0].trim()) throw new Error(P.name + ': 모델이 빈 답을 줬어요. 다시 만들어 주세요.');
+          rsStore(entry, { platform: pf, format: o.format, tone: o.tone, target: o.target, posts, at: new Date().toISOString() });
+          saveBook(book);
+        }
         view.rs = {};
       } catch (e) {
         view.rs = { error: e.name === 'AbortError' ? '만들기를 중단했어요.' : (e.message || String(e)) };
       }
       if (view.name === 'export') render();
+    };
+    const run = document.getElementById('rs-run');
+    if (run) run.addEventListener('click', () => generate([rsOpts().platform]));
+    const all = document.getElementById('rs-all');
+    if (all) all.addEventListener('click', () => {
+      if (!confirm('네이버 블로그, Threads, 인스타그램 캡션, 쇼츠·릴스 대본, 유튜브 롱폼 대본을 차례로 만들어요. 몇 분 걸릴 수 있어요. 시작할까요?')) return;
+      generate(RS_ALL);
     });
     const stop = document.getElementById('rs-stop');
     if (stop) stop.addEventListener('click', () => { if (view.rs && view.rs.ctrl) view.rs.ctrl.abort(); });
-    const saved = entry.restyled;
+    const saved = rsSaved(entry, rsOpts().platform);
     if (!saved) return;
+    if (entry.restyled === saved) { rsStore(entry, saved); }
     const lim = (F.RS_PLATFORMS[saved.platform] || F.RS_PLATFORMS.threads).limit;
     app.querySelectorAll('[data-rspost]').forEach(el => el.addEventListener('input', () => {
       const i = Number(el.dataset.rspost);
       saved.posts[i] = el.value;
       const n = Array.from(el.value).length;
       const c = document.getElementById('rs-count-' + i);
-      if (c) { c.textContent = (i + 1) + '/' + saved.posts.length + ' · ' + n + '/' + lim + '자' + (n > lim ? ' · 너무 길어요' : ''); c.className = 'small ' + (n > lim ? 'over' : 'muted'); }
+      if (c) { c.textContent = (saved.posts.length > 1 ? (i + 1) + '/' + saved.posts.length + ' · ' : '') + n + '/' + lim + '자' + (n > lim ? ' · 너무 길어요' : ''); c.className = 'small ' + (n > lim ? 'over' : 'muted'); }
       saveBook(book, { quiet: true });
     }));
     app.querySelectorAll('[data-rscopy]').forEach(b => b.addEventListener('click', async () => {
@@ -1316,6 +1349,8 @@
       }
       const old = b.textContent; b.textContent = '복사됨'; setTimeout(() => { b.textContent = old; }, 1200);
     }));
+    const vb = document.getElementById('rs-video');
+    if (vb) vb.addEventListener('click', () => go({ name: 'video', kind: saved.platform === 'shorts' ? 'short' : 'long', ai: saved.platform, bookId: book.id, date: view.date, from: view }));
   }
 
   function renderExport() {
@@ -1327,7 +1362,7 @@
     if (filled.length && view.did !== 'none' && !filled.some(d => d.id === view.did)) view.did = filled[0].id;
     if (!filled.length) view.did = 'none';
     const opts = { intro: state.intro, outro: state.outro, draftId: view.did };
-    const tabs = [['restyle', '✨ 타깃 맞춤 재구성'], ['blog', '네이버 블로그'], ['threads', 'Threads'], ['long', '롱폼 대본'], ['short', '쇼츠·릴스 대본']];
+    const tabs = [['restyle', '✨ AI 재구성'], ['blog', '네이버 블로그'], ['threads', 'Threads'], ['long', '롱폼 대본'], ['short', '쇼츠·릴스 대본']];
     let body = '';
     if (!entry || !F.hasContent(entry)) {
       body = '<div class="empty">이 날 기록이 아직 없어요.</div>';
@@ -1430,8 +1465,14 @@
       if (!entry || !F.hasContent(entry)) { back(); return; }
       items = [{ book, entry }];
       vertical = view.kind === 'short';
-      const sc = vertical ? F.shortScript(book, entry, { quoteIndex: view.qi || 0, draftId: view.did }) : F.longScript(book, entry, Object.assign({ draftId: view.did }, opts));
-      sc.scenes.forEach(s => { s.book = book; scenes.push(s); });
+      const ai = view.ai && ((entry.restyledBy || {})[view.ai] || (entry.restyled && entry.restyled.platform === view.ai ? entry.restyled : null));
+      if (ai) {
+        // AI 재구성 대본: 장면 하나 = 내가 읽을 한 덩어리
+        ai.posts.filter(x => x && x.trim()).forEach((x, i) => scenes.push({ part: i === 0 ? '첫 마디' : '장면 ' + (i + 1), screen: '', say: x.trim(), book }));
+      } else {
+        const sc = vertical ? F.shortScript(book, entry, { quoteIndex: view.qi || 0, draftId: view.did }) : F.longScript(book, entry, Object.assign({ draftId: view.did }, opts));
+        sc.scenes.forEach(s => { s.book = book; scenes.push(s); });
+      }
       title = book.title + ' · ' + F.sessionNumber(book, view.date) + '번째 날';
     }
     if (!scenes.length) { back(); return; }
@@ -1443,7 +1484,7 @@
         book: (b.title || '') + (b.id && view.date ? ' · ' + F.sessionNumber(b, view.date) + '번째 날' : '') };
     });
     const motions = items.map(it => ({ bookId: it.book.id, title: it.book.title, motion: mod.pickMotion(it.book) }));
-    const storeKey = [view.kind, view.kind === 'day' ? 'all' : view.bookId, view.date, view.kind === 'short' ? (view.qi || 0) : '', view.did || ''].join('|');
+    const storeKey = [view.kind, view.kind === 'day' ? 'all' : view.bookId, view.date, view.kind === 'short' ? (view.qi || 0) : '', view.did || '', view.ai || ''].join('|');
     const safe = String(title).replace(/[\\/:*?"<>|·]+/g, ' ').replace(/\s+/g, '-');
     if (videoHandle) videoHandle.stop();
     videoHandle = await mod.mount(app, {

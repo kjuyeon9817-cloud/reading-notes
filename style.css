@@ -371,3 +371,5 @@ p.over, .small.over { color: var(--warn); }
 .pause-reason { background: var(--accent-soft); border-radius: 14px; padding: 12px 14px; margin: 12px 0 4px; white-space: pre-wrap; line-height: 1.7; }
 @keyframes mfade { from { opacity: 0; } to { opacity: 1; } }
 .pause-banner .btn { white-space: nowrap; flex-shrink: 0; }
+.rs-post.tall { min-height: 420px; }
+.date-chips.wrap { flex-wrap: wrap; overflow: visible; }

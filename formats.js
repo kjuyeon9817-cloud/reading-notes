@@ -270,7 +270,37 @@
   }
 
   // ---------- 어투·목표 독자 맞춤 재구성 (AI에게 줄 지시) ----------
-  const RS_PLATFORMS = { threads: { name: 'Threads', limit: 500 }, x: { name: 'X(트위터)', limit: 280 }, blog: { name: '네이버 블로그', limit: 2500 } };
+  // 플랫폼마다 글의 생김새가 다르다. multi = 여러 개로 나뉘는 글(스레드·대본 장면)
+  const RS_PLATFORMS = {
+    blog: { name: '네이버 블로그', limit: 3000, unit: '글', spec: [
+      '- 첫 줄에 "제목: (검색하는 사람의 고민이 담긴 제목, 30자 안팎)"을 씁니다.',
+      '- 본문 1500~2500자. 소제목 3~4개(■ 로 시작)로 나눕니다.',
+      '- 흐름: 독자의 고민에 공감하는 도입 → 이 책을 읽게 된 이유 → 마음에 남은 문장(그대로 인용)과 내 생각 → 오늘 읽은 내용 → 내 삶에 적용할 것 → 독자에게 던지는 질문.',
+      '- 처음 보는 사람도 이해하도록 책과 저자를 한두 문장으로 소개합니다(기록 안의 정보만).',
+      '- 마지막 줄에 해시태그 5~8개.'] },
+    threads: { name: 'Threads', limit: 500, multi: true, unit: '포스트', formats: true, spec: [
+      '- 첫 포스트는 스크롤을 멈추게 하는 한 줄로 시작합니다.',
+      '- 1~2문장마다 줄을 바꾸고 빈 줄로 나눕니다.',
+      '- 마지막 포스트는 댓글을 부르는 질문으로 끝내고, 해시태그는 최대 2개.'] },
+    insta: { name: '인스타그램 캡션', limit: 2200, unit: '캡션', spec: [
+      '- 첫 줄은 40자 이내의 훅. 피드에서 "더 보기"를 누르게 만드는 문장.',
+      '- 짧은 문단 4~6개, 문단 사이 빈 줄. 이모지는 문단 앞에 1개 정도만.',
+      '- 마음에 남은 문장 1~2개만 인용하고 내 생각을 붙입니다.',
+      '- 끝에서 "저장해두고 다시 꺼내보세요" 같은 저장·공유 유도 한 줄과 질문 하나.',
+      '- 마지막에 해시태그 8~12개.'] },
+    shorts: { name: '쇼츠·릴스 대본', limit: 120, multi: true, unit: '장면', spec: [
+      '- 내 목소리로 읽을 40~55초 대본(말하는 글 전체 220~280자).',
+      '- 장면 5~7개. 장면 하나는 한두 문장, 120자 이내.',
+      '- 장면1: 2초 안에 멈추게 하는 훅. 장면2~3: 문장 인용 1개와 왜 멈췄는지. 다음: 내 생각·적용. 마지막: 짧은 질문.',
+      '- 말로 읽기 쉬운 짧은 문장, 입말로 씁니다.'] },
+    longform: { name: '유튜브 롱폼 대본', limit: 400, multi: true, unit: '장면', spec: [
+      '- 내 목소리로 읽을 3~5분 대본(말하는 글 전체 900~1400자).',
+      '- 장면 10~16개. 장면 하나는 1~3문장, 400자 이내.',
+      '- 흐름: 훅(시청자의 고민) → 오늘 책 소개와 읽게 된 이유 → 문장 2~3개 인용과 각각의 내 생각 → 오늘 읽은 내용 → 적용할 것 → 질문과 다음 이야기 예고.',
+      '- 말로 읽기 쉬운 입말로 씁니다.'] },
+    x: { name: 'X(트위터)', limit: 280, multi: true, unit: '포스트', formats: true, spec: [
+      '- 짧고 단단한 문장. 해시태그는 마지막에 최대 2개.'] }
+  };
   const RS_FORMATS = { single: { label: '단일 포스트', count: '1개' }, short: { label: '숏 스레드', count: '4~5개' }, long: { label: '롱 스레드', count: '7~9개' } };
   const RS_TONES = {
     viral: { label: '바이럴 후킹', prompt: '바이럴 후킹형 — 강렬한 호기심 유발, 짧고 임팩트 있는 문장, 반전과 넘버링 활용' },
@@ -290,11 +320,22 @@
     const qs = quotes(entry);
     if (qs.length) {
       lines.push('', '[책에서 옮긴 문장과 고른 이유]');
-      qs.forEach((q, i) => lines.push((i + 1) + '. "' + t(q.text) + '"' + (has(q.page) ? ' (' + t(q.page) + ')' : ''), '   고른 이유: ' + (t(q.reason) || '(안 적음)')));
+      qs.forEach((q, i) => {
+        const where = [tocTitle(book, q), t(q.page)].filter(Boolean).join(' · ');
+        lines.push((i + 1) + '. "' + t(q.text) + '"' + (where ? ' (' + where + ')' : ''), '   고른 이유: ' + (t(q.reason) || '(안 적음)'));
+      });
     }
     if (has(entry.summary)) lines.push('', '[오늘 읽은 내용 정리]', t(entry.summary));
     const as = apps(entry);
     if (as.length) { lines.push('', '[내 삶에 적용할 것]'); as.forEach((a, i) => lines.push((i + 1) + '. ' + t(a.text))); }
+    draftList(entry).filter(filledDraft).forEach(d0 => {
+      const d = draftOf(entry, d0.id);
+      lines.push('', '[내가 쓴 원고' + (d.theme ? ': ' + d.theme : '') + ']');
+      if (d.hook) lines.push('첫 한 줄: ' + d.hook);
+      if (d.story) lines.push('내 이야기: ' + d.story);
+      if (d.action) lines.push('실천: ' + d.action);
+      if (d.ask) lines.push('질문: ' + d.ask);
+    });
     return lines.join('\n');
   }
 
@@ -444,31 +485,30 @@
   function restyleMessages(book, entry, o) {
     const p = RS_PLATFORMS[o.platform] || RS_PLATFORMS.threads;
     const f = RS_FORMATS[o.format] || RS_FORMATS.short;
-    const tone = RS_TONES[o.tone] || RS_TONES.viral;
+    const tone = RS_TONES[o.tone] || RS_TONES.friendly;
+    const count = p.formats ? f.count : null;
     const system = [
-      '당신은 한 사람의 독서 기록을 ' + p.name + ' 글로 다시 구성하는 편집자입니다.',
-      '글쓴이는 AI가 대신 생각해 주는 글이 아니라, 자기가 직접 읽고 느낀 것을 사람 대 사람으로 나누고 싶어 합니다.',
+      '당신은 한 사람의 독서 기록을 ' + p.name + '에 맞게 처음부터 끝까지 다시 구성하는 편집자입니다.',
+      '처음 보는 사람도 자연스럽게 읽고 공감하도록, 그 플랫폼에서 실제로 잘 읽히는 글의 모양으로 만듭니다.',
       '',
       '반드시 지킬 것:',
-      '- 재료는 아래 독서 기록뿐입니다. 기록에 없는 경험, 사례, 숫자, 통계, 인용을 지어내지 않습니다.',
+      '- 재료는 아래 독서 기록뿐입니다. 기록에 없는 경험, 사례, 숫자, 통계, 다른 책·사람의 말을 지어내지 않습니다.',
       '- 글쓴이의 생각, 느낌, 실천 결과가 글의 중심입니다. 일반론으로 바꾸지 않습니다.',
       '- 책에서 옮긴 문장을 쓸 때는 한 글자도 바꾸지 않고 따옴표로 그대로 씁니다.',
       '- 글쓴이 시점(1인칭 "나")으로 씁니다.',
+      '- "~에 대해 알아보겠습니다", "결론적으로" 같은 AI 말투를 쓰지 않습니다.',
       '',
-      '바꿔도 되는 것:',
-      '- 어투: ' + tone.prompt,
-      '- 목표 독자에게 닿도록 순서, 강조점, 첫 문장, 말 거는 방식을 다시 구성합니다.',
+      '어투: ' + tone.prompt,
       '',
-      '형식:',
-      '- 포스트 하나당 ' + p.limit + '자를 넘기지 않습니다.',
-      '- 1~2문장마다 줄을 바꾸고 빈 줄로 나눕니다.',
-      '- "~에 대해 알아보겠습니다" 같은 AI 말투를 쓰지 않습니다.',
-      '- 해시태그는 마지막 포스트에만 최대 2개.',
-      '- 포스트 개수: ' + f.count,
-      '- 각 포스트 앞에 ###POST### 를 한 줄로 쓰고, 번호(1/5 등)는 붙이지 않습니다. 인사말이나 설명 없이 첫 ###POST### 부터 시작합니다.'
-    ].join('\n');
+      p.name + ' 형식:'
+    ].concat(p.spec).concat(p.multi ? [
+      '- ' + p.unit + ' 하나당 ' + p.limit + '자를 넘기지 않습니다.' + (count ? ' ' + p.unit + ' 개수: ' + count : ''),
+      '- 각 ' + p.unit + ' 앞에 ###POST### 를 한 줄로 쓰고, 번호는 붙이지 않습니다. 인사말이나 설명 없이 첫 ###POST### 부터 시작합니다.'
+    ] : [
+      '- 전체 ' + p.limit + '자를 넘기지 않습니다. 인사말이나 설명 없이 바로 글을 씁니다.'
+    ]).join('\n');
     const user = '[목표 독자]\n' + (t(o.target) || '(지정 안 함)') + '\n\n[독서 기록]\n' + recordText(book, entry) +
-      '\n\n이 기록으로 목표 독자에게 닿는 ' + p.name + ' 글을 써주세요.';
+      '\n\n이 기록으로 목표 독자에게 닿는 ' + p.name + '를 처음부터 끝까지 써주세요.';
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
   }
 
