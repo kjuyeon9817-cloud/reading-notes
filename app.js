@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126n';
+  const APP_VERSION = '20261126o';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -1123,6 +1123,63 @@
     (root || app).querySelectorAll('textarea.grow').forEach(ta => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; });
   }
 
+  // 장별 화면 그대로 마크다운으로: 장 → 하위 목차 → | 번호 | 발췌 문장 | 내 생각 | 표, 그 아래 잇는 생각
+  function chapterOrdered(book, chapId) {
+    const list = chapterQuotes(book, chapId);
+    const group = tocGroups(book).find(g => g.item.id === chapId);
+    const secs = [];
+    if (group) {
+      const own = list.filter(x => x.q.tocId === group.item.id);
+      if (own.length) secs.push({ title: '', items: own });
+      group.kids.forEach(k => { const its = list.filter(x => x.q.tocId === k.id); if (its.length) secs.push({ title: k.title, items: its }); });
+    } else secs.push({ title: '', items: list });
+    const ordered = [];
+    secs.forEach(sec => sec.items.forEach(x => ordered.push(Object.assign({ sec: sec.title }, x))));
+    return { group, ordered };
+  }
+  function chapterMarkdown(book, chapIds) {
+    const sessions = bookSessions(book);
+    const cell = v => String(v || '').trim().replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
+    const short = d => { const x = parseDay(d); return (x.getMonth() + 1) + '/' + x.getDate(); };
+    const L = ['# ' + book.title + ' · 장별 발췌와 생각', '',
+      (book.author ? book.author + ' · ' : '') + fmtDate(book.startDate) + ' 시작 · ' + fmtDate(todayStr()) + ' 내려받음', ''];
+    chapIds.forEach(chapId => {
+      const { group, ordered } = chapterOrdered(book, chapId);
+      const thoughts = (book.thoughts || []).filter(t => t.tocId === chapId && t.text && t.text.trim());
+      if (!ordered.length && !thoughts.length) return;
+      const numOf = {}; ordered.forEach((x, k) => { numOf[x.q.id] = k + 1; });
+      L.push('## ' + (group ? group.item.title : '목차 미지정'), '');
+      let sec = null;
+      ordered.forEach((x, k) => {
+        if (k === 0 || x.sec !== sec) {
+          if (k > 0) L.push('');
+          sec = x.sec;
+          if (sec) L.push('### ' + sec, '');
+          L.push('| # | 발췌 문장 | 내 생각 |', '|---|---|---|');
+        }
+        const sNo = sessions.indexOf(x.date) + 1;
+        const where = [x.q.page, (sNo ? sNo + '번째 날 ' : '') + short(x.date)].filter(Boolean).join(' · ');
+        L.push('| ' + (k + 1) + ' | ' + cell(x.q.text) + (where ? '<br>*(' + cell(where) + ')*' : '') + ' | ' + cell(x.q.reason) + ' |');
+      });
+      if (thoughts.length) {
+        L.push('', '### 여러 문장을 잇는 생각', '');
+        thoughts.forEach((t, k) => {
+          const nums = (t.quoteIds || []).map(id => numOf[id]).filter(Boolean).sort((a, b) => a - b);
+          L.push('- **잇는 생각 ' + (k + 1) + '**' + (nums.length ? ' (문장 ' + nums.join(', ') + ')' : '') + ': ' + t.text.trim().replace(/\r?\n/g, '\n  '));
+        });
+      }
+      L.push('');
+    });
+    return L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  }
+  function downloadText(name, text) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+    a.download = name.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
   function renderChapter() {
     const book = books[view.bookId];
     const groups = tocGroups(book);
@@ -1217,6 +1274,8 @@
       '<p class="muted small">여러 날 나눠 적은 발췌 문장을 장마다 한곳에 모아요. 문장 옆에 내 생각이 바로 붙어 있고, 여기서 고치면 그 날 기록에도 그대로 반영돼요. 하루 포스팅은 여전히 그 날 기록만 써요.</p>' +
       (groups.length ? '' : '<p class="notice">책 화면의 📑 목차에 장 제목을 적으면 장마다 나눠 볼 수 있어요. 지금은 모든 문장을 한곳에 보여줘요.</p>') +
       '<div class="chap-chips">' + chips + '</div>' +
+      '<div class="actions" style="margin-top:0"><button class="btn ghost small" type="button" id="md-chap">⬇ 이 장 마크다운</button>' +
+      '<button class="btn ghost small" type="button" id="md-book">⬇ 책 전체 마크다운</button></div>' +
       '<div class="card chap-card">' +
       '<div class="quote-head"><h2 style="margin:0">' + (group ? esc(group.item.title) : '목차 미지정') + '</h2>' +
       '<span class="small muted">문장 ' + list.length + '개 · 생각 ' + list.filter(x => x.q.reason && x.q.reason.trim()).length + '개</span></div>' +
@@ -1236,6 +1295,13 @@
     document.getElementById('back').addEventListener('click', () => go({ name: 'book', bookId: book.id }));
     const keepScroll = fn => { const y = window.scrollY; fn(); window.scrollTo(0, y); };
     app.querySelectorAll('[data-chap]').forEach(el => el.addEventListener('click', () => { view.chap = el.dataset.chap; view.linkEdit = null; view.cpage = 0; render(); }));
+    document.getElementById('md-chap').addEventListener('click', () => {
+      if (!list.length && !thoughts.some(t => t.text && t.text.trim())) { alert('이 장에는 아직 내려받을 문장이 없어요.'); return; }
+      downloadText(book.title + ' - ' + (group ? group.item.title : '목차 미지정') + '.md', chapterMarkdown(book, [chap]));
+    });
+    document.getElementById('md-book').addEventListener('click', () => {
+      downloadText(book.title + ' - 장별 발췌.md', chapterMarkdown(book, groups.map(g => g.item.id).concat('none')));
+    });
     document.getElementById('bulk-add').addEventListener('click', () => bulkModal(book, {
       tocId: chap === 'none' ? '' : chap,
       done: (d, tocId) => { view.chap = chapterIdOf(book, tocId); view.cpage = 999; render(); }
