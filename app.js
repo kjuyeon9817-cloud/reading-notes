@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126m';
+  const APP_VERSION = '20261126n';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -1169,16 +1169,28 @@
     const pairHtml = x => {
       const q = x.q, id = q.id, n = numOf[id], linked = thoughtsOf(id);
       const sNo = sessions.indexOf(x.date) + 1;
-      return '<div class="pair" id="pair-' + esc(id) + '">' +
+      // 평소에는 한 줄씩 접어 두고, 누르면 펼쳐서 전체를 보고 고친다
+      if (!(view.openPairs || {})[id]) {
+        const line = v => esc(String(v || '').trim().replace(/\s*\n\s*/g, ' '));
+        return '<div class="pair compact" id="pair-' + esc(id) + '">' +
+          '<button type="button" class="pair-q pair-tap" data-popen="' + esc(id) + '|text" aria-expanded="false">' +
+          '<span class="qnum">' + n + '</span><span class="pair-line">' + (line(q.text) || '<span class="muted">(문장 없음)</span>') + '</span>' +
+          (q.page ? '<span class="qpage">' + esc(q.page) + '</span>' : '') + '</button>' +
+          '<button type="button" class="pair-t pair-tap' + (q.reason && q.reason.trim() ? '' : ' blank') + '" data-popen="' + esc(id) + '|reason" aria-expanded="false">' +
+          '<span class="pair-line">' + (line(q.reason) || '<span class="muted">+ 내 생각 쓰기</span>') + '</span>' +
+          (linked.length ? '<span class="pair-lc" title="이어진 생각">🔗' + linked.length + '</span>' : '') +
+          '<span class="qchev">▼</span></button></div>';
+      }
+      return '<div class="pair open" id="pair-' + esc(id) + '">' +
         '<div class="pair-q">' +
-        '<div class="pair-meta"><span class="qnum">' + n + '</span>' +
+        '<div class="pair-meta"><button type="button" class="qnum pair-fold" data-pclose="' + esc(id) + '" title="접기" aria-expanded="true">' + n + '</button>' +
         (q.page ? '<span class="qpage">' + esc(q.page) + '</span>' : '') +
         '<button type="button" class="linkish small" data-goday="' + x.date + '|' + x.i + '">' + (sNo ? sNo + '번째 날 · ' : '') + shortDate(x.date) + '</button>' +
         '<select class="pair-toc" data-pq="' + esc(id) + '" data-pf="tocId" aria-label="목차 바꾸기">' + tocOptions(book, q.tocId || '', '목차 미지정') + '</select></div>' +
         '<textarea class="grow pair-text" data-pq="' + esc(id) + '" data-pf="text" rows="1" aria-label="발췌 문장 ' + n + '">' + esc(q.text) + '</textarea>' +
         '</div>' +
         '<div class="pair-t' + (q.reason && q.reason.trim() ? '' : ' blank') + '">' +
-        '<div class="pair-meta"><strong class="small">내 생각</strong></div>' +
+        '<div class="pair-meta"><strong class="small">내 생각</strong><button type="button" class="linkish small pair-close" data-pclose="' + esc(id) + '">접기 ▲</button></div>' +
         '<textarea class="grow" data-pq="' + esc(id) + '" data-pf="reason" rows="1" placeholder="이 문장에서 든 생각을 적어요" aria-label="문장 ' + n + '에 대한 내 생각">' + esc(q.reason) + '</textarea>' +
         (linked.length ? '<div class="pair-links">' + linked.map(t => '<button type="button" class="link-chip" data-gothought="' + esc(t.id) + '">🔗 ' + esc(preview(t.text, 24) || '(비어 있는 생각)') + '</button>').join('') + '</div>' : '') +
         '</div></div>';
@@ -1259,12 +1271,23 @@
     }));
     const flash = el => { if (!el) return; el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); };
     app.querySelectorAll('[data-gothought]').forEach(el => el.addEventListener('click', () => flash(document.getElementById('thought-' + el.dataset.gothought))));
+    app.querySelectorAll('[data-popen]').forEach(el => el.addEventListener('click', () => {
+      const [id, f] = el.dataset.popen.split('|');
+      view.openPairs = Object.assign({}, view.openPairs, { [id]: true }); keepScroll(render);
+      const ta = app.querySelector('#pair-' + id + ' textarea[data-pf="' + f + '"]');
+      if (ta) { ta.focus({ preventScroll: true }); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    }));
+    app.querySelectorAll('[data-pclose]').forEach(el => el.addEventListener('click', () => {
+      view.openPairs = Object.assign({}, view.openPairs); delete view.openPairs[el.dataset.pclose]; keepScroll(render);
+    }));
     app.querySelectorAll('[data-cpage]').forEach(el => el.addEventListener('click', () => {
       view.cpage = Number(el.dataset.cpage); render(); document.querySelector('.chap-card').scrollIntoView({ block: 'start' });
     }));
     app.querySelectorAll('[data-gopair]').forEach(el => el.addEventListener('click', () => {
       const id = el.dataset.gopair, p = Math.floor((numOf[id] - 1) / QUOTES_PER_PAGE);
-      if (p !== cpage) { view.cpage = p; view.linkEdit = null; render(); }
+      view.openPairs = Object.assign({}, view.openPairs, { [id]: true });
+      if (p !== cpage) { view.cpage = p; view.linkEdit = null; }
+      keepScroll(render);
       flash(document.getElementById('pair-' + id));
     }));
     const at = document.getElementById('add-thought');

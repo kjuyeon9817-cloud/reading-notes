@@ -429,3 +429,16 @@ p.over, .small.over { color: var(--warn); }
 }
 @media (max-width: 480px) { .bulk-opts { grid-template-columns: 1fr; } }
 .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
+/* 접힌 줄: 한 줄만, 누르면 펼침 */
+.pair.compact { margin-top: 6px; border-radius: 12px; }
+.pair-tap { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; font: inherit; color: var(--ink); cursor: pointer; border: 0; }
+.pair-q.pair-tap { background: var(--bg); }
+.pair-tap:hover .pair-line { color: var(--accent); text-decoration: underline dotted; }
+.pair-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pair.compact .pair-t::before { top: 50%; margin-top: -10px; }
+.pair-lc { flex: none; font-size: .75rem; }
+.pair.open { box-shadow: 0 0 0 2px var(--yellow); }
+.pair-fold { border: 0; cursor: pointer; font-family: inherit; }
+.pair-close { margin-left: auto; }
+.pair-q.pair-tap { padding-right: 16px; }
+@media (max-width: 560px) { .pair.compact .qpage { display: none; } .pair.compact .pair-t { padding-left: 16px; } }
