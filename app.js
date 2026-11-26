@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126l';
+  const APP_VERSION = '20261126m';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -1137,7 +1137,6 @@
     }
     const group = groups.find(g => g.item.id === chap);
     const list = chapterQuotes(book, chap);
-    const numOf = {}; list.forEach((x, k) => { numOf[x.q.id] = k + 1; });
     const thoughts = (book.thoughts || []).filter(t => t.tocId === chap);
     const thoughtsOf = id => thoughts.filter(t => (t.quoteIds || []).includes(id));
     const shortDate = d => { const x = parseDay(d); return (x.getMonth() + 1) + '/' + x.getDate(); };
@@ -1155,6 +1154,17 @@
       if (own.length) sections.push({ title: '', items: own });
       group.kids.forEach(k => { const its = list.filter(x => x.q.tocId === k.id); if (its.length) sections.push({ title: k.title, items: its }); });
     } else sections.push({ title: '', items: list });
+    // 번호는 보이는 순서(하위 목차별, 그 안에서 쪽수 순)대로. 10개가 넘으면 페이지로 나눈다.
+    const ordered = [];
+    sections.forEach(sec => sec.items.forEach(x => ordered.push(Object.assign({ sec: sec.title }, x))));
+    const numOf = {}; ordered.forEach((x, k) => { numOf[x.q.id] = k + 1; });
+    const cpages = Math.max(1, Math.ceil(ordered.length / QUOTES_PER_PAGE));
+    const cpage = Math.min(Math.max(view.cpage || 0, 0), cpages - 1);
+    view.cpage = cpage;
+    const shown = ordered.slice(cpage * QUOTES_PER_PAGE, (cpage + 1) * QUOTES_PER_PAGE);
+    const cpager = cpages > 1 ? '<div class="pager">' + Array.from({ length: cpages }, (_, p) =>
+      '<button type="button" class="chip' + (p === cpage ? ' on' : '') + '" data-cpage="' + p + '">' +
+      (p + 1) + '페이지 · ' + (p * QUOTES_PER_PAGE + 1) + '–' + Math.min((p + 1) * QUOTES_PER_PAGE, ordered.length) + '</button>').join('') + '</div>' : '';
 
     const pairHtml = x => {
       const q = x.q, id = q.id, n = numOf[id], linked = thoughtsOf(id);
@@ -1182,7 +1192,7 @@
         '<textarea class="grow" data-tid="' + esc(t.id) + '" rows="3" placeholder="여러 문장을 함께 보며 든 생각을 적어요">' + esc(t.text) + '</textarea>' +
         '<div class="thought-links"><span class="small muted">연결한 문장</span>' +
         (editing
-          ? list.map(x => '<button type="button" class="num-chip' + (ids.includes(x.q.id) ? ' on' : '') + '" data-tlink="' + esc(t.id) + '|' + esc(x.q.id) + '" title="' + esc(preview(x.q.text, 40)) + '" aria-pressed="' + ids.includes(x.q.id) + '">' + numOf[x.q.id] + '</button>').join('') +
+          ? ordered.map(x => '<button type="button" class="num-chip' + (ids.includes(x.q.id) ? ' on' : '') + '" data-tlink="' + esc(t.id) + '|' + esc(x.q.id) + '" title="' + esc(preview(x.q.text, 40)) + '" aria-pressed="' + ids.includes(x.q.id) + '">' + numOf[x.q.id] + '</button>').join('') +
             '<button type="button" class="btn small" data-tedit="">완료</button>'
           : (ids.length ? ids.sort((a, b) => numOf[a] - numOf[b]).map(id => '<button type="button" class="num-chip on" data-gopair="' + esc(id) + '" title="' + esc(preview(findQuote(book, id).q.text, 40)) + '">' + numOf[id] + '</button>').join('') : '<span class="small muted">아직 없어요</span>') +
             (list.length ? '<button type="button" class="btn ghost small" data-tedit="' + esc(t.id) + '">문장 고르기</button>' : '')) +
@@ -1202,7 +1212,7 @@
       (chap === 'none' && list.length && hasTocPages ? '<button class="btn ghost small" type="button" id="auto-link">쪽수로 목차 자동 연결</button>' : '') + '</div>' +
       (chap === 'none' && list.length ? '<p class="small muted">목차가 아직 없는 문장이에요. 문장마다 위쪽 칸에서 목차를 고르면 그 장으로 옮겨가요.' +
         (hasTocPages ? '' : ' 목차 줄 끝에 <strong>| 시작 쪽수</strong>를 적어두면(예: <code>1장 읽는 뇌 | 15</code>) 쪽수로 한 번에 연결할 수 있어요.') + '</p>' : '') +
-      (list.length ? sections.map(s => (s.title ? '<h3 class="pair-sec">└ ' + esc(s.title) + '</h3>' : '') + s.items.map(pairHtml).join('')).join('')
+      (list.length ? cpager + shown.map((x, k) => (x.sec && (k === 0 || shown[k - 1].sec !== x.sec) ? '<h3 class="pair-sec">└ ' + esc(x.sec) + '</h3>' : '') + pairHtml(x)).join('') + cpager
         : '<p class="empty" style="padding:24px 0">이 장에 연결된 문장이 아직 없어요.</p>') +
       '</div>' +
       (chap !== 'none' || list.length ? '<div class="card"><h2>🔗 여러 문장을 잇는 생각</h2>' +
@@ -1213,10 +1223,10 @@
     autoGrow();
     document.getElementById('back').addEventListener('click', () => go({ name: 'book', bookId: book.id }));
     const keepScroll = fn => { const y = window.scrollY; fn(); window.scrollTo(0, y); };
-    app.querySelectorAll('[data-chap]').forEach(el => el.addEventListener('click', () => { view.chap = el.dataset.chap; view.linkEdit = null; render(); }));
+    app.querySelectorAll('[data-chap]').forEach(el => el.addEventListener('click', () => { view.chap = el.dataset.chap; view.linkEdit = null; view.cpage = 0; render(); }));
     document.getElementById('bulk-add').addEventListener('click', () => bulkModal(book, {
       tocId: chap === 'none' ? '' : chap,
-      done: (d, tocId) => { view.chap = chapterIdOf(book, tocId); render(); }
+      done: (d, tocId) => { view.chap = chapterIdOf(book, tocId); view.cpage = 999; render(); }
     }));
     const al = document.getElementById('auto-link');
     if (al) al.addEventListener('click', () => {
@@ -1249,7 +1259,14 @@
     }));
     const flash = el => { if (!el) return; el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); };
     app.querySelectorAll('[data-gothought]').forEach(el => el.addEventListener('click', () => flash(document.getElementById('thought-' + el.dataset.gothought))));
-    app.querySelectorAll('[data-gopair]').forEach(el => el.addEventListener('click', () => flash(document.getElementById('pair-' + el.dataset.gopair))));
+    app.querySelectorAll('[data-cpage]').forEach(el => el.addEventListener('click', () => {
+      view.cpage = Number(el.dataset.cpage); render(); document.querySelector('.chap-card').scrollIntoView({ block: 'start' });
+    }));
+    app.querySelectorAll('[data-gopair]').forEach(el => el.addEventListener('click', () => {
+      const id = el.dataset.gopair, p = Math.floor((numOf[id] - 1) / QUOTES_PER_PAGE);
+      if (p !== cpage) { view.cpage = p; view.linkEdit = null; render(); }
+      flash(document.getElementById('pair-' + id));
+    }));
     const at = document.getElementById('add-thought');
     if (at) at.addEventListener('click', () => {
       book.thoughts = book.thoughts || [];

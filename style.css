@@ -415,12 +415,17 @@ p.over, .small.over { color: var(--warn); }
 .bulk-opts input, .bulk-opts select { margin-top: 4px; }
 @keyframes pairflash { from { box-shadow: 0 0 0 4px var(--yellow); } to { box-shadow: 0 0 0 0 transparent; } }
 .flash { animation: pairflash 1.4s ease-out; }
-@media (min-width: 760px) {
-  .pair-head { display: grid; grid-template-columns: 1.15fr 1fr; gap: 0; margin: 12px 0 -4px; font-size: .78rem; color: var(--muted); font-weight: 700; }
-  .pair-head span { padding: 0 12px; }
-  .pair { grid-template-columns: 1.15fr 1fr; }
-  .pair-t { border-top: 0; border-left: 1px dashed var(--yellow); }
-  .pair-t::before { content: "→"; top: 14px; left: -11px; }
+/* 왼쪽 발췌 문장, 오른쪽 내 생각 (휴대폰에서도 나란히) */
+.pair { grid-template-columns: 1.1fr 1fr; }
+.pair-t { border-top: 0; border-left: 1px dashed var(--yellow); }
+.pair-t::before { content: "→"; top: 14px; left: -11px; }
+@media (max-width: 560px) {
+  .pair-q, .pair-t { padding: 8px 8px 8px 10px; }
+  .pair-t { padding-left: 14px; }
+  .pair textarea { font-size: .92rem; padding: 4px; }
+  .pair-meta { gap: 4px 6px; }
+  .pair-meta .pair-toc { margin-left: 0; width: 100%; }
+  .pair-meta .linkish { font-size: .75rem; }
 }
 @media (max-width: 480px) { .bulk-opts { grid-template-columns: 1fr; } }
 .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
