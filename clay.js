@@ -134,8 +134,15 @@ function person(ctx, x, y, s, p, look, seed, boil) {
   const lw = s * 0.11;
   shadowAt(ctx, x + lean * 0.3, y + s * 0.02, s * 0.38);
   limb(ctx, legs(-1), lw, shade(body, -0.12)); limb(ctx, legs(1), lw, shade(body, -0.12));
+  // 신발
+  [-1, 1].forEach(side => { const f = legs(side)[2], dir = side * 0.3 + (p.lean || 0) * 2; blob(ctx, f[0] + dir * s * 0.03, f[1] + s * 0.005, s * 0.075, s * 0.045, seed + 8 + side, boil, 0.05); clay(ctx, f[0], f[1], s * 0.075, '#6b4630', seed + 9, 1); });
   if (p.armBehind) limb(ctx, arms(p.armBehind), lw * 0.85, body);
   blob(ctx, bodyC[0], bodyC[1], s * 0.24, s * 0.29, seed + 1, boil, 0.05); clay(ctx, bodyC[0], bodyC[1], s * 0.27, body, seed + 2, 2);
+  // 옷깃 + 단추 + 주머니 바느질
+  blob(ctx, bodyC[0], bodyC[1] - s * 0.24, s * 0.12, s * 0.05, seed + 11, boil, 0.06); clay(ctx, bodyC[0], bodyC[1] - s * 0.24, s * 0.12, K.cream, seed + 12, 1);
+  for (let b = 0; b < 3; b++) { blob(ctx, bodyC[0], bodyC[1] - s * 0.12 + b * s * 0.09, s * 0.018, s * 0.018, seed + 13 + b, boil, 0.1); clay(ctx, bodyC[0], bodyC[1] - s * 0.12 + b * s * 0.09, s * 0.018, shade(body, -0.45), seed, 0); }
+  ctx.save(); ctx.setLineDash([s * 0.012, s * 0.01]); ctx.strokeStyle = shade(body, -0.35); ctx.lineWidth = s * 0.006; ctx.globalAlpha = 0.7;
+  ctx.beginPath(); ctx.arc(bodyC[0] + s * 0.1, bodyC[1] + s * 0.06, s * 0.05, 0, Math.PI); ctx.stroke(); ctx.restore();
   // 머리
   ctx.save(); ctx.translate(headC[0], headC[1]); ctx.rotate(p.tilt || 0);
   blob(ctx, 0, 0, s * 0.21, s * 0.2, seed + 3, boil, 0.04); clay(ctx, 0, 0, s * 0.21, skin, seed + 4, 1);
@@ -151,6 +158,15 @@ function person(ctx, x, y, s, p, look, seed, boil) {
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.beginPath(); ctx.arc(cx - s * 0.009, cy - s * 0.012, s * 0.008, 0, Math.PI * 2); ctx.fill();
   };
   if (p.eyes !== 'none') { eye(-0.075); eye(0.075); }
+  // 눈썹 (기분 따라 기울기)
+  ctx.save(); ctx.strokeStyle = shade(body, -0.5); ctx.lineWidth = s * 0.014; ctx.lineCap = 'round';
+  [-1, 1].forEach(side => {
+    const bx = side * 0.075 * s + ex, by = -s * 0.045 + ey * 0.5, tiltB = p.mouth === 'sad' ? -0.35 * side : p.mouth === 'flat' ? 0.15 * side : 0;
+    ctx.beginPath(); ctx.moveTo(bx - s * 0.03 * Math.cos(tiltB), by + s * 0.03 * Math.sin(tiltB) * side); ctx.lineTo(bx + s * 0.03 * Math.cos(tiltB), by - s * 0.03 * Math.sin(tiltB) * side); ctx.stroke();
+  });
+  ctx.restore();
+  // 코
+  blob(ctx, ex, s * 0.045 + ey, s * 0.022, s * 0.018, seed + 15, boil, 0.08); clay(ctx, ex, s * 0.045 + ey, s * 0.022, shade(skin, -0.08), seed + 15, 0);
   // 볼
   ctx.globalAlpha = 0.35; ctx.fillStyle = '#e8735a';
   ctx.beginPath(); ctx.ellipse(-s * 0.12 + ex, s * 0.07, s * 0.03, s * 0.018, 0, 0, Math.PI * 2); ctx.fill();
@@ -328,6 +344,217 @@ function stage(ctx, pose, x, y, s, tt, dur, seed, boil) {
   }
 }
 
+// ---------- 풍경 ----------
+// 자세마다 어울리는 무대: 방(창문·책장·등·화분) 또는 바깥(하늘·언덕·나무·꽃·길)
+const SETS = {
+  read: { kind: 'room', time: 'day', shelf: true, frame: true },
+  write: { kind: 'room', time: 'evening', lamp: true, shelf: true },
+  think: { kind: 'room', time: 'night', lamp: true, frame: true },
+  rest: { kind: 'room', time: 'day', plant: true, frame: true },
+  none: { kind: 'room', time: 'day', shelf: true, plant: true },
+  comfort: { kind: 'out', time: 'sunset', trees: true, bench: true, flowers: true },
+  walk: { kind: 'out', time: 'day', trees: true, path: true },
+  cheer: { kind: 'out', time: 'day', flowers: true, trees: true },
+  hope: { kind: 'out', time: 'dawn', trees: true },
+  sad: { kind: 'out', time: 'grey', rain: true, trees: true }
+};
+const SKY = { day: ['#a9d6ea', '#fbe7c6'], sunset: ['#ef9a62', '#fcd79c'], dawn: ['#b9a6d6', '#fde0b2'], grey: ['#8e9aa3', '#d6d0c6'], night: ['#2d3a5c', '#6b6f93'], evening: ['#e9905d', '#f6c48c'] };
+function mix(a, b, k) { const A = hex(a), B = hex(b); return 'rgb(' + A.map((v, i) => Math.round(v + (B[i] - v) * k)).join(',') + ')'; }
+
+function skyFill(ctx, x, y, w, h, time, k) {
+  const c = SKY[time] || SKY.day;
+  const top = k ? mix(c[0], SKY.day[0], k) : c[0], bot = k ? mix(c[1], SKY.day[1], k) : c[1];
+  const g = ctx.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, top); g.addColorStop(1, bot);
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+}
+function hill(ctx, W, baseY, amp, color, seed, boil, S) {
+  ctx.beginPath(); ctx.moveTo(0, baseY + amp * 3);
+  for (let x = 0; x <= W; x += W / 40) {
+    const y = baseY - amp * (Math.sin(x / W * 3.1 + seed) * 0.7 + Math.sin(x / W * 7.3 + seed * 2) * 0.3) + (rnd(seed + x + boil) - 0.5) * S * 0.003;
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(W, baseY + amp * 3); ctx.lineTo(W, 2 * baseY); ctx.lineTo(0, 2 * baseY); ctx.closePath();
+  clay(ctx, W * 0.4, baseY, W * 0.6, color, seed, 3);
+}
+function tree(ctx, x, y, s, t, seed, boil, tint) {
+  shadowAt(ctx, x, y, s * 0.35);
+  limb(ctx, [[x, y], [x + s * 0.02, y - s * 0.45], [x - s * 0.01, y - s * 0.7]], s * 0.09, '#7a5236');
+  const sway = Math.sin(t * 0.9 + seed) * s * 0.015;
+  [[0, -0.95, 0.32], [-0.22, -0.78, 0.24], [0.22, -0.8, 0.25], [-0.1, -1.18, 0.22], [0.14, -1.12, 0.2]].forEach(([dx, dy, r], i) => {
+    blob(ctx, x + dx * s + sway, y + dy * s, r * s, r * s * 0.9, seed + i * 5, boil, 0.08);
+    clay(ctx, x + dx * s + sway, y + dy * s, r * s, i % 2 ? shade(tint, 0.08) : tint, seed + i, 2);
+  });
+}
+function flower(ctx, x, y, s, color, seed, boil, t) {
+  const sw = Math.sin(t * 1.5 + seed) * s * 0.06;
+  limb(ctx, [[x, y], [x + sw, y - s * 0.5]], s * 0.06, '#6e9a55');
+  for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; ball(ctx, x + sw + Math.cos(a) * s * 0.13, y - s * 0.5 + Math.sin(a) * s * 0.13, s * 0.09, color, seed + i, boil); }
+  ball(ctx, x + sw, y - s * 0.5, s * 0.07, K.sun, seed + 9, boil);
+}
+
+function scenery(ctx, W, H, pose, tt, dur, seed, boil, floorY, S, vertical, charX) {
+  const set = SETS[pose] || SETS.none;
+  // 인물이 서 있는 쪽을 피해서 소품을 둔다
+  const farSide = charX < W * 0.4 ? 1 : 0;
+  if (set.kind === 'room') {
+    let g = ctx.createLinearGradient(0, 0, 0, floorY); g.addColorStop(0, K.wall2); g.addColorStop(1, K.wall1);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, floorY);
+    // 벽지 결 + 손자국
+    ctx.save(); ctx.globalAlpha = 0.07; ctx.fillStyle = '#8a4b22';
+    for (let x = 0; x < W; x += S * 0.06) ctx.fillRect(x, 0, S * 0.012, floorY);
+    ctx.globalAlpha = 0.5; prints(ctx, W * 0.2, H * 0.2, S * 0.5, K.wall1, 3, 3); prints(ctx, W * 0.8, H * 0.5, S * 0.5, K.wall1, 7, 3); ctx.restore();
+    // 창문
+    const ww = vertical ? W * 0.42 : W * 0.2, wh = vertical ? H * 0.2 : H * 0.36;
+    const wx = vertical ? W * 0.52 : (farSide ? W * 0.7 : W * 0.1), wy = vertical ? H * 0.08 : H * 0.12;
+    ctx.save(); ctx.shadowColor = 'rgba(80,35,10,.35)'; ctx.shadowBlur = S * 0.02; ctx.shadowOffsetY = S * 0.01;
+    blob(ctx, wx + ww / 2, wy + wh / 2, ww * 0.56, wh * 0.56, seed + 400, boil, 0.015); ctx.fillStyle = '#8a5a3a'; ctx.fill(); ctx.restore();
+    blob(ctx, wx + ww / 2, wy + wh / 2, ww * 0.56, wh * 0.56, seed + 400, boil, 0.015); clay(ctx, wx + ww / 2, wy + wh / 2, ww * 0.56, '#9a6440', seed + 400, 2);
+    ctx.save(); rr2(ctx, wx, wy, ww, wh, S * 0.02); ctx.clip();
+    skyFill(ctx, wx, wy, ww, wh, set.time);
+    if (set.time === 'night') {
+      for (let i = 0; i < 14; i++) { ctx.globalAlpha = 0.5 + 0.5 * Math.sin(tt * 2 + i); ball(ctx, wx + rnd(i + 3) * ww, wy + rnd(i + 9) * wh * 0.7, S * 0.004, '#fff3c4', i, boil); }
+      ctx.globalAlpha = 1; ball(ctx, wx + ww * 0.7, wy + wh * 0.3, S * 0.035, '#fff0b8', seed + 410, boil);
+    } else {
+      cloud(ctx, wx + ((tt * S * 0.01 + ww * 0.3) % (ww * 1.4)) - ww * 0.2, wy + wh * 0.3, S * 0.035, seed + 411, boil, '#fffaf0');
+      hill(ctx, ww, wy + wh * 0.85, wh * 0.06, '#8fb07a', seed + 412, boil, S);
+    }
+    ctx.restore();
+    // 창살
+    ctx.save(); ctx.strokeStyle = '#8a5a3a'; ctx.lineWidth = S * 0.012; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(wx + ww / 2, wy); ctx.lineTo(wx + ww / 2, wy + wh); ctx.moveTo(wx, wy + wh / 2); ctx.lineTo(wx + ww, wy + wh / 2); ctx.stroke(); ctx.restore();
+    // 커튼
+    [-1, 1].forEach(side => {
+      const cx = wx + ww / 2 + side * ww * 0.56, sw = Math.sin(tt * 0.8 + side) * S * 0.004;
+      blob(ctx, cx + sw, wy + wh * 0.5, ww * 0.1, wh * 0.62, seed + 420 + side, boil, 0.04); clay(ctx, cx, wy + wh * 0.5, wh * 0.62, '#c8604a', seed + 420, 2);
+    });
+    // 창에서 들어오는 빛
+    if (set.time !== 'night') {
+      ctx.save(); ctx.globalAlpha = 0.16 + 0.02 * Math.sin(tt); ctx.fillStyle = '#fff1c8';
+      ctx.beginPath(); ctx.moveTo(wx, wy + wh); ctx.lineTo(wx + ww, wy + wh); ctx.lineTo(wx + ww * 1.4, H); ctx.lineTo(wx + ww * 0.1, H); ctx.closePath(); ctx.fill(); ctx.restore();
+    }
+    // 액자
+    if (set.frame && !vertical) {
+      const fx = farSide ? W * 0.52 : W * 0.4, fy = H * 0.16, fw = S * 0.14, fh = S * 0.11;
+      blob(ctx, fx, fy, fw / 2, fh / 2, seed + 430, boil, 0.03); clay(ctx, fx, fy, fw / 2, '#b07848', seed + 430, 1);
+      blob(ctx, fx, fy, fw * 0.38, fh * 0.34, seed + 431, boil, 0.03); clay(ctx, fx, fy, fw * 0.38, '#f2d7a8', seed + 431, 0);
+      ball(ctx, fx - fw * 0.12, fy, S * 0.012, K.heart, seed, boil); ball(ctx, fx + fw * 0.12, fy + fh * 0.05, S * 0.016, '#7fa07a', seed + 1, boil);
+    }
+    // 바닥
+    let g2 = ctx.createLinearGradient(0, floorY, 0, H); g2.addColorStop(0, K.table1); g2.addColorStop(1, K.table2);
+    ctx.fillStyle = g2; ctx.fillRect(0, floorY, W, H - floorY);
+    ctx.fillStyle = 'rgba(255,220,170,.35)'; ctx.fillRect(0, floorY, W, S * 0.006);
+    ctx.save(); ctx.globalAlpha = 0.35; ctx.strokeStyle = shade(K.table2, -0.2); ctx.lineWidth = S * 0.003;
+    for (let i = 0; i < 5; i++) { ctx.beginPath(); const yy = floorY + (H - floorY) * (0.2 + i * 0.18); ctx.moveTo(0, yy); ctx.bezierCurveTo(W * 0.3, yy + S * 0.01, W * 0.6, yy - S * 0.012, W, yy + S * 0.004); ctx.stroke(); }
+    ctx.restore();
+    // 둥근 러그
+    blob(ctx, charX, floorY + (H - floorY) * 0.55, S * 0.34, (H - floorY) * 0.32, seed + 440, boil, 0.02); clay(ctx, charX, floorY + (H - floorY) * 0.55, S * 0.34, '#d98e5e', seed + 440, 2);
+    ctx.save(); ctx.setLineDash([S * 0.015, S * 0.012]); ctx.strokeStyle = '#f6d7a8'; ctx.lineWidth = S * 0.005; ctx.globalAlpha = 0.8;
+    ctx.beginPath(); ctx.ellipse(charX, floorY + (H - floorY) * 0.55, S * 0.29, (H - floorY) * 0.25, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+    // 책장
+    if (set.shelf) {
+      const bx = farSide ? W * 0.03 : W * 0.84, bw = vertical ? W * 0.3 : W * 0.13, bh = floorY * 0.62, by = floorY - bh;
+      const sx = vertical ? W * 0.05 : bx;
+      ctx.save(); ctx.shadowColor = 'rgba(80,35,10,.35)'; ctx.shadowBlur = S * 0.02; ctx.shadowOffsetX = S * 0.008;
+      rr2(ctx, sx, vertical ? floorY - H * 0.22 : by, bw, vertical ? H * 0.22 : bh, S * 0.012); ctx.fillStyle = '#8a5a3a'; ctx.fill(); ctx.restore();
+      const rows = vertical ? 2 : 4, top = vertical ? floorY - H * 0.22 : by, hh = (vertical ? H * 0.22 : bh) / rows;
+      for (let r = 0; r < rows; r++) {
+        ctx.fillStyle = '#6b4128'; ctx.fillRect(sx + S * 0.01, top + (r + 1) * hh - S * 0.012, bw - S * 0.02, S * 0.01);
+        let x = sx + S * 0.015, i = 0;
+        while (x < sx + bw - S * 0.04) {
+          const w = S * (0.018 + rnd(seed + r * 13 + i) * 0.014), h = hh * (0.6 + rnd(seed + r * 7 + i) * 0.25);
+          const col = [K.book, '#d9a441', '#6f8fb8', '#7fa07a', '#e07a52', '#f1e4c8'][(r * 3 + i) % 6];
+          blob(ctx, x + w / 2, top + (r + 1) * hh - S * 0.012 - h / 2, w / 2, h / 2, seed + r * 31 + i, boil, 0.03); clay(ctx, x + w / 2, top + (r + 1) * hh - h / 2, h / 2, col, seed + i, 0);
+          x += w + S * 0.003; i++;
+        }
+      }
+    }
+    // 스탠드
+    if (set.lamp) {
+      const lx = vertical ? W * 0.86 : (farSide ? W * 0.6 : W * 0.74), ly = floorY + (H - floorY) * 0.3;
+      const gl = ctx.createRadialGradient(lx, ly - S * 0.55, 0, lx, ly - S * 0.55, S * 0.5);
+      gl.addColorStop(0, 'rgba(255,214,130,' + (0.55 + 0.05 * Math.sin(tt * 3)) + ')'); gl.addColorStop(1, 'rgba(255,214,130,0)');
+      ctx.fillStyle = gl; ctx.fillRect(lx - S * 0.5, ly - S * 1.05, S, S);
+      shadowAt(ctx, lx, ly, S * 0.08);
+      limb(ctx, [[lx, ly], [lx, ly - S * 0.5]], S * 0.018, '#6b4630');
+      ctx.beginPath(); ctx.moveTo(lx - S * 0.08, ly - S * 0.5); ctx.lineTo(lx - S * 0.05, ly - S * 0.62); ctx.lineTo(lx + S * 0.05, ly - S * 0.62); ctx.lineTo(lx + S * 0.08, ly - S * 0.5); ctx.closePath();
+      clay(ctx, lx, ly - S * 0.56, S * 0.08, '#f3d08a', seed + 450, 1);
+      blob(ctx, lx, ly, S * 0.06, S * 0.015, seed + 451, boil); clay(ctx, lx, ly, S * 0.06, '#6b4630', seed, 0);
+    }
+    // 화분
+    if (set.plant) {
+      const px = vertical ? W * 0.86 : (farSide ? W * 0.62 : W * 0.74), py = floorY + (H - floorY) * 0.35, ps = S * 0.2;
+      shadowAt(ctx, px, py, ps * 0.4);
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI / 2 + (i - 2.5) * 0.35 + Math.sin(tt * 0.9 + i) * 0.04, len = ps * (0.7 + rnd(i + seed) * 0.4);
+        const ex = px + Math.cos(a) * len, ey = py - ps * 0.35 + Math.sin(a) * len;
+        limb(ctx, [[px, py - ps * 0.3], [ex, ey]], ps * 0.03, '#6e9a55');
+        blob(ctx, ex, ey, ps * 0.13, ps * 0.07, seed + i * 3, boil, 0.06, a); clay(ctx, ex, ey, ps * 0.13, i % 2 ? '#7fa866' : '#6a9455', seed + i, 1);
+      }
+      ctx.beginPath(); ctx.moveTo(px - ps * 0.22, py - ps * 0.38); ctx.lineTo(px + ps * 0.22, py - ps * 0.38); ctx.lineTo(px + ps * 0.16, py); ctx.lineTo(px - ps * 0.16, py); ctx.closePath();
+      clay(ctx, px, py - ps * 0.2, ps * 0.25, '#c76b45', seed + 460, 1);
+    }
+  } else {
+    // 바깥
+    const clear = set.rain ? ease((tt / Math.max(dur, 3) - 0.5) * 2) : 0;
+    skyFill(ctx, 0, 0, W, floorY + S * 0.1, set.time, clear * 0.6);
+    // 해 또는 노을 빛
+    if (set.time === 'sunset') { const g = ctx.createRadialGradient(W * 0.75, floorY * 0.7, 0, W * 0.75, floorY * 0.7, S * 0.6); g.addColorStop(0, 'rgba(255,220,140,.7)'); g.addColorStop(1, 'rgba(255,220,140,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, floorY); ball(ctx, W * 0.75, floorY * 0.72, S * 0.07, '#ffb35c', seed + 500, boil); }
+    if (set.time === 'day' && pose !== 'hope') { sunSmall(ctx, farSide ? W * 0.85 : W * 0.15, H * 0.13, S * 0.05, tt, seed, boil); }
+    // 구름
+    for (let i = 0; i < 3; i++) {
+      const cx = ((rnd(seed + i * 4) * W + tt * S * 0.012 * (1 + i * 0.4)) % (W * 1.3)) - W * 0.15;
+      cloud(ctx, cx, H * (0.1 + i * 0.07), S * (0.05 + i * 0.012), seed + 510 + i, boil, set.rain && clear < 0.5 ? '#b3b0ad' : '#fffaf2');
+    }
+    // 먼 언덕 3겹
+    const greens = set.time === 'sunset' ? ['#c69a6a', '#a98b5a', '#8f9a5a'] : set.time === 'grey' ? ['#9aa89a', '#8a9a84', '#7d8f72'] : set.time === 'dawn' ? ['#b6a6b8', '#9fae8a', '#8aa676'] : ['#a8c79a', '#8fb87d', '#7aa866'];
+    hill(ctx, W, floorY - S * 0.16, S * 0.05, greens[0], seed + 520, boil, S);
+    hill(ctx, W, floorY - S * 0.07, S * 0.04, greens[1], seed + 521, boil, S);
+    // 나무 (먼 것 작게, 가까운 것 크게)
+    if (set.trees) {
+      const spots = vertical ? [[0.12, -0.02, 0.18], [0.88, -0.01, 0.2]] : (farSide ? [[0.62, -0.03, 0.22], [0.92, 0.0, 0.32], [0.48, -0.06, 0.14]] : [[0.06, 0.0, 0.32], [0.36, -0.04, 0.2], [0.82, -0.05, 0.18]]);
+      spots.forEach(([fx, fy, fs], i) => tree(ctx, W * fx, floorY + fy * H, H * fs, tt, seed + 530 + i, boil, set.time === 'sunset' ? '#9a9a4a' : set.time === 'grey' ? '#6f8a66' : '#6f9e55'));
+    }
+    // 앞 풀밭
+    ctx.beginPath(); ctx.moveTo(0, floorY);
+    for (let x = 0; x <= W; x += W / 30) ctx.lineTo(x, floorY + Math.sin(x / W * 5 + seed) * S * 0.01 + (rnd(x + boil) - 0.5) * S * 0.003);
+    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+    clay(ctx, W * 0.4, floorY, W * 0.7, greens[2], seed + 540, 4);
+    // 풀잎
+    ctx.save(); ctx.strokeStyle = shade(greens[2], -0.2); ctx.lineWidth = S * 0.005; ctx.lineCap = 'round';
+    for (let i = 0; i < 40; i++) { const gx = rnd(seed + i * 7) * W, gy = floorY + rnd(seed + i * 3) * (H - floorY) * 0.9 + S * 0.02, sw = Math.sin(tt * 1.4 + i) * S * 0.004;
+      ctx.beginPath(); ctx.moveTo(gx, gy); ctx.quadraticCurveTo(gx + sw, gy - S * 0.015, gx + sw * 2, gy - S * 0.03); ctx.stroke(); }
+    ctx.restore();
+    // 길
+    if (set.path) {
+      ctx.beginPath(); ctx.moveTo(0, floorY + (H - floorY) * 0.35); ctx.bezierCurveTo(W * 0.3, floorY + (H - floorY) * 0.15, W * 0.7, floorY + (H - floorY) * 0.25, W, floorY + (H - floorY) * 0.1);
+      ctx.lineTo(W, floorY + (H - floorY) * 0.45); ctx.bezierCurveTo(W * 0.7, floorY + (H - floorY) * 0.6, W * 0.3, floorY + (H - floorY) * 0.5, 0, floorY + (H - floorY) * 0.7); ctx.closePath();
+      clay(ctx, W / 2, floorY + (H - floorY) * 0.35, W * 0.5, '#e2c193', seed + 550, 3);
+    }
+    // 벤치
+    if (set.bench) {
+      const bx = charX, by = floorY + (H - floorY) * 0.05, bw = S * 0.62;
+      [-1, 1].forEach(sd => limb(ctx, [[bx + sd * bw * 0.4, by + S * 0.12], [bx + sd * bw * 0.4, by - S * 0.1]], S * 0.025, '#6b4630'));
+      for (let r = 0; r < 3; r++) { blob(ctx, bx, by - S * (0.12 + r * 0.06), bw / 2, S * 0.022, seed + 560 + r, boil, 0.02); clay(ctx, bx, by - S * (0.12 + r * 0.06), bw / 2, '#a8744c', seed + 560 + r, 1); }
+    }
+    // 꽃
+    if (set.flowers) {
+      const cols = ['#e2574c', '#f6b73c', '#f2a7b8', '#fff3d6', '#b58fd6'];
+      for (let i = 0; i < (vertical ? 7 : 10); i++) {
+        let fx = rnd(seed + i * 11) * W; if (Math.abs(fx - charX) < S * 0.32) fx += S * 0.64 * (fx < charX ? -1 : 1);
+        flower(ctx, fx, floorY + (H - floorY) * (0.25 + rnd(seed + i * 5) * 0.6), S * 0.09, cols[i % 5], seed + i, boil, tt);
+      }
+    }
+    // 비
+    if (set.rain) {
+      ctx.save(); ctx.strokeStyle = 'rgba(200,215,235,' + (0.5 * (1 - clear)) + ')'; ctx.lineWidth = S * 0.003; ctx.lineCap = 'round';
+      for (let i = 0; i < 70; i++) { const rx = rnd(i * 3.3) * W, ry = ((rnd(i * 7.1) * H + tt * H * 0.9) % H); ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx - S * 0.006, ry + S * 0.03); ctx.stroke(); }
+      ctx.restore();
+    }
+  }
+}
+function sunSmall(ctx, x, y, r, t, seed, boil) { sun(ctx, x, y, r, t, seed + 600, boil); }
+function rr2(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+
 // ---------- 지문 글씨 ----------
 const CLAY_FONT = '"Jua", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
 let tmp = null;
@@ -395,26 +622,13 @@ export function draw(ctx, W, H, scene, t, dur, info, U) {
 function render(ctx, W, H, scene, tt, dur, info, U, frame, boil) {
   const vertical = H > W, S = Math.min(W, H), seed = scene.seed || 0;
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowColor = 'transparent';
-  // 무대: 벽 + 탁자
   const tableY = H * (vertical ? 0.8 : 0.74);
-  let g = ctx.createLinearGradient(0, 0, 0, tableY);
-  g.addColorStop(0, K.wall2); g.addColorStop(1, K.wall1);
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, tableY);
-  // 벽의 손자국 결
-  ctx.save(); ctx.globalAlpha = 0.5; prints(ctx, W * 0.2, H * 0.2, S * 0.5, K.wall1, 3, 3); prints(ctx, W * 0.8, H * 0.5, S * 0.5, K.wall1, 7, 3); ctx.restore();
-  g = ctx.createLinearGradient(0, tableY, 0, H);
-  g.addColorStop(0, K.table1); g.addColorStop(1, K.table2);
-  ctx.fillStyle = g; ctx.fillRect(0, tableY, W, H - tableY);
-  ctx.fillStyle = 'rgba(255,220,170,.35)'; ctx.fillRect(0, tableY, W, S * 0.006);
-  ctx.save(); ctx.globalAlpha = 0.35; ctx.strokeStyle = shade(K.table2, -0.2); ctx.lineWidth = S * 0.003;
-  for (let i = 0; i < 5; i++) { ctx.beginPath(); const yy = tableY + (H - tableY) * (0.2 + i * 0.18); ctx.moveTo(0, yy); ctx.bezierCurveTo(W * 0.3, yy + S * 0.01, W * 0.6, yy - S * 0.012, W, yy + S * 0.004); ctx.stroke(); }
-  ctx.restore();
-
+  let g;
   // 따뜻한 조명 (왼쪽 위 스포트라이트)
   const flick = 1 + (rnd(frame * 1.7) - 0.5) * 0.06;
   g = ctx.createRadialGradient(W * 0.32, H * 0.18, S * 0.05, W * 0.4, H * 0.4, S * 1.1);
-  g.addColorStop(0, 'rgba(255,214,140,' + (0.55 * flick) + ')'); g.addColorStop(0.6, 'rgba(255,170,90,.12)'); g.addColorStop(1, 'rgba(255,150,80,0)');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  g.addColorStop(0, 'rgba(255,214,140,' + (0.4 * flick) + ')'); g.addColorStop(0.6, 'rgba(255,170,90,.1)'); g.addColorStop(1, 'rgba(255,150,80,0)');
+  const light = g;
 
   // 배치
   let charX, charY, charS, box;
@@ -424,8 +638,11 @@ function render(ctx, W, H, scene, tt, dur, info, U, frame, boil) {
   const isTitle = scene.kind === 'title' || scene.kind === 'heading';
   // 글 끄기: 제목·소제목 화면만 글을 남기고, 나머지는 인물을 가운데 크게
   const noText = scene.hideText && !isTitle;
-  if (noText) { charX = W * 0.5; charY = H * (vertical ? 0.78 : 0.86); charS = vertical ? H * 0.3 : H * 0.5; }
+  if (noText) { charX = W * 0.5; charY = H * (vertical ? 0.9 : 0.86); charS = vertical ? H * 0.3 : H * 0.5; }
   if (pose === 'none') { box = vertical ? { x: W * 0.07, y: H * 0.2, w: W * 0.86, h: H * 0.5 } : { x: W * 0.12, y: H * 0.16, w: W * 0.76, h: H * 0.56 }; }
+  // 풍경은 조명보다 먼저 그려야 하므로, 지금 그린 조명 위에 덮고 조명을 다시 얹는다
+  scenery(ctx, W, H, pose, tt, dur, seed, boil, tableY, S, vertical, noText || vertical ? W * 0.5 : charX);
+  ctx.fillStyle = light; ctx.fillRect(0, 0, W, H);
 
   // 글 받침 (점토 판)
   const mainText = noText ? '' : (scene.screen || scene.say || '');
