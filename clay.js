@@ -386,7 +386,7 @@ export async function prepare(texts) {
 let frameCache = null;
 export function draw(ctx, W, H, scene, t, dur, info, U) {
   const frame = Math.floor(t * FPS), tt = frame / FPS, boil = Math.floor(t * FPS / 2) % 3;
-  const key = [scene._id, frame, W, H, Math.round(info.progress * 200)].join('|');
+  const key = [scene._id, scene.hideText ? 'h' : 's', frame, W, H, Math.round(info.progress * 200)].join('|');
   if (!frameCache || frameCache.width !== W || frameCache.height !== H) { frameCache = document.createElement('canvas'); frameCache.width = W; frameCache.height = H; frameCache.key = ''; }
   if (frameCache.key !== key) { render(frameCache.getContext('2d'), W, H, scene, tt, dur, info, U, frame, boil); frameCache.key = key; }
   ctx.save(); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(frameCache, 0, 0); ctx.restore();
@@ -421,11 +421,14 @@ function render(ctx, W, H, scene, tt, dur, info, U, frame, boil) {
   if (vertical) { charX = W * 0.5; charY = H * 0.86; charS = H * 0.24; box = { x: W * 0.07, y: H * 0.13, w: W * 0.86, h: H * 0.4 }; }
   else { charX = W * 0.25; charY = H * 0.84; charS = H * 0.42; box = { x: W * 0.45, y: H * 0.14, w: W * 0.5, h: H * 0.6 }; }
   const pose = scene.pose && POSES[scene.pose] ? scene.pose : autoPose(scene);
+  const isTitle = scene.kind === 'title' || scene.kind === 'heading';
+  // 글 끄기: 제목·소제목 화면만 글을 남기고, 나머지는 인물을 가운데 크게
+  const noText = scene.hideText && !isTitle;
+  if (noText) { charX = W * 0.5; charY = H * (vertical ? 0.78 : 0.86); charS = vertical ? H * 0.3 : H * 0.5; }
   if (pose === 'none') { box = vertical ? { x: W * 0.07, y: H * 0.2, w: W * 0.86, h: H * 0.5 } : { x: W * 0.12, y: H * 0.16, w: W * 0.76, h: H * 0.56 }; }
 
   // 글 받침 (점토 판)
-  const mainText = scene.screen || scene.say || '';
-  const isTitle = scene.kind === 'title' || scene.kind === 'heading';
+  const mainText = noText ? '' : (scene.screen || scene.say || '');
   if (mainText) {
     const appear = pop(tt * 2.2);
     const bx = box.x + box.w / 2, by = box.y + box.h / 2;
@@ -462,7 +465,7 @@ function render(ctx, W, H, scene, tt, dur, info, U, frame, boil) {
 
   // 장면 이름 (작은 점토 알약) + 진행 막대
   const label = scene.part || '';
-  if (label && !isTitle) {
+  if (label && !isTitle && !noText) {
     ctx.font = '700 ' + Math.round(S * 0.03) + 'px ' + U.FONT;
     const lw = ctx.measureText(label).width + S * 0.06, lh = S * 0.06, lx = vertical ? W * 0.07 : W * 0.04, ly = vertical ? H * 0.06 : H * 0.05;
     blob(ctx, lx + lw / 2, ly + lh / 2, lw / 2, lh / 2, seed + 300, boil, 0.03); clay(ctx, lx + lw / 2, ly + lh / 2, lw / 2, K.people[3][0], seed + 300, 1);

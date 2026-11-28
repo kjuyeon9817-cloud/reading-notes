@@ -19,6 +19,9 @@ export async function loadClay() {
 }
 const POSE_KEY = 'rn.pose|';
 function savedPose(k) { try { return localStorage.getItem(POSE_KEY + k) || ''; } catch (e) { return ''; } }
+// 점토 스타일에서 화면에 글을 띄울지 (기본: 안 띄움, 목소리와 인물만)
+function clayText() { try { return localStorage.getItem('rn.clay.text') === '1'; } catch (e) { return false; } }
+function setClayText(v) { try { localStorage.setItem('rn.clay.text', v ? '1' : '0'); } catch (e) { /* 화면에서는 바뀜 */ } }
 function savePose(k, v) { try { if (v) localStorage.setItem(POSE_KEY + k, v); else localStorage.removeItem(POSE_KEY + k); } catch (e) { /* 이 기기에 못 남겨도 화면에서는 바뀜 */ } }
 
 const KEYWORDS = [
@@ -329,6 +332,8 @@ export async function mount(root, opts) {
     : opts.storeKey + '|' + i + '|' + hash(s.say);
   const poseKey = (s, i) => keyOf(s, i) + '|' + hash(s.screen || '');
   // 고른 인물: 이 기기에서 바꾼 것 > md에 적은 [인물: …] > 자동 ('auto' = 일부러 자동으로 둠)
+  let showText = clayText();
+  scenes.forEach(s => { s.hideText = !showText; });
   scenes.forEach((s, i) => { const v = savedPose(poseKey(s, i)); s.pose = v === 'auto' ? '' : (v || s.pose || ''); });
   try { await loadClay(); } catch (e) { /* 점토 스타일 없이 다른 모션은 쓸 수 있음 */ }
   const clips = await Promise.all(scenes.map((s, i) => s.say ? clipGet(keyOf(s, i)) : null));
@@ -355,6 +360,7 @@ export async function mount(root, opts) {
       '<div class="card"><h2>모션 스타일</h2>' +
       opts.motions.map(m => '<label class="small">' + esc(m.title) + '</label><div class="date-chips">' +
         Object.keys(MOTIONS).map(k => '<button type="button" class="chip' + (k === m.motion ? ' on' : '') + '" data-motion="' + k + '" data-mbook="' + esc(m.bookId) + '" title="' + esc(MOTIONS[k].hint) + '">' + esc(MOTIONS[k].label) + '</button>').join('') + '</div>').join('') +
+      (scenes.some(s => s.motion === 'clay') ? '<label class="small" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="v-text"' + (showText ? ' checked' : '') + '> 점토 스톱모션 화면에 글 띄우기 (끄면 목소리와 인물만, 제목·소제목은 그대로)</label>' : '') +
       '<p class="small muted">' + esc(opts.motionHint || '책의 주제를 보고 자동으로 골랐어요. 눌러서 바꿀 수 있어요.') + '</p></div>' +
       '<div class="card"><h2>장면별 녹음</h2><p class="small muted">장면을 누르면 위 화면에서 움직임을 볼 수 있어요. 🎙를 누르고 아래 글을 읽은 뒤 ■로 멈춰요. 틀린 장면만 다시 녹음하면 돼요.</p>' +
       scenes.map((s, i) => '<div class="dub-row' + (clips[i] ? ' done' : '') + '" data-scene="' + i + '">' +
@@ -498,6 +504,8 @@ export async function mount(root, opts) {
       opts.onMotion(bid, m);
       paint();
     }));
+    const vt = root.querySelector('#v-text');
+    if (vt) vt.addEventListener('change', () => { showText = vt.checked; setClayText(showText); scenes.forEach(s => { s.hideText = !showText; }); draw(0, 1.5); });
     root.querySelectorAll('[data-pose]').forEach(el => el.addEventListener('change', () => {
       const i = Number(el.dataset.pose), s = scenes[i];
       s.pose = el.value; savePose(poseKey(s, i), el.value || 'auto');
