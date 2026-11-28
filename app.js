@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261126o';
+  const APP_VERSION = '20261128a';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -394,6 +394,7 @@
     else if (view.name === 'export') renderExport();
     else if (view.name === 'dayexport') renderDayExport();
     else if (view.name === 'video') renderVideo();
+    else if (view.name === 'mdvideo') renderMdVideo();
     else if (view.name === 'chapter') renderChapter();
   }
 
@@ -469,7 +470,8 @@
       '<h1 class="hero-word">오늘 읽은 한 문장이<br><span class="hl">누군가의 하루를 버티게</span></h1>' +
       '<p class="hero-sub">' + fmtDate(t) + ' · 문장이 서툴러도 괜찮아요. 오늘 읽은 만큼만, 내 말로 적어요.</p>' +
       '<div class="actions"><button class="btn arrow" data-go="newbook" type="button">새 책 시작하기</button>' +
-      '<button class="btn ghost" id="day-export" type="button">오늘 롱폼 대본</button></div>' +
+      '<button class="btn ghost" id="day-export" type="button">오늘 롱폼 대본</button>' +
+      '<button class="btn ghost" data-go-md type="button">📄 내 md로 영상</button></div>' +
       '</section>' +
       '<h2 class="list-section-title">지금 읽는 책</h2>' +
       (reading.length ? '<div class="book-list">' + reading.map(card).join('') + '</div>' : '<div class="empty-hero">아직 읽고 있는 책이 없어요</div>') +
@@ -478,6 +480,7 @@
       '<p class="foot">하루하루 버티는 사람들에게, 사람의 문장으로</p>';
     app.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => go({ name: 'book', bookId: el.dataset.open, date: todayStr() })));
     document.getElementById('day-export').addEventListener('click', () => go({ name: 'dayexport', date: todayStr() }));
+    app.querySelector('[data-go-md]').addEventListener('click', () => go({ name: 'mdvideo', from: view }));
     bindConnectBanner();
   }
 
@@ -1803,6 +1806,60 @@
       '<button class="btn arrow" type="button" id="mk-video">시작</button></div>';
   }
 
+  // ---------- 내가 쓴 md 파일 → 더빙 영상 ----------
+  const MD_KEY = 'rn.md.last', MD_FMT = 'rn.md.vertical';
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 이 기기에 못 남겨도 계속 */ } }
+  async function renderMdVideo() {
+    let md;
+    try { md = await import('./mdscript.js?v=' + APP_VERSION); }
+    catch (e) { app.innerHTML = '<p class="notice">md 기능을 불러오지 못했어요: ' + esc(e.message) + '</p>'; return; }
+    if (view.text == null) view.text = lsGet(MD_KEY) || '';
+    if (view.vertical == null) view.vertical = lsGet(MD_FMT) === '1';
+    const POSE_LABEL = { read: '책 읽기', think: '생각하기', comfort: '안아주기', walk: '걸어가기', rest: '쉬어가기', cheer: '기뻐하기', write: '기록하기', hope: '하늘 보기', sad: '고개 숙이기', none: '인물 없음' };
+    const KIND = { title: '제목', heading: '소제목', quote: '발췌', thought: '내 생각' };
+    const paint = () => {
+      const parsed = md.parseMd(view.text);
+      const sc = parsed.scenes;
+      app.innerHTML =
+        '<button class="back" type="button" id="back">← 돌아가기</button>' +
+        '<h1>📄 내 md로 더빙 영상 만들기</h1>' +
+        '<p class="muted small">직접 정리한 발췌와 생각을 md 파일로 올리면, 쓴 순서와 글 그대로 장면을 나눠요. 글은 한 글자도 고치지 않아요.</p>' +
+        '<div class="card">' +
+        '<label for="md-file">md 파일 고르기</label><input id="md-file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain">' +
+        '<label for="md-text">또는 여기에 붙여넣기 · 고치기</label><textarea id="md-text" rows="12" placeholder="# 제목&#10;&#10;> 발췌 문장 (p.23)&#10;&#10;내 생각 한 문단&#10;[인물: 위로]">' + esc(view.text) + '</textarea>' +
+        '<label>영상 모양</label><div class="seg" id="md-fmt">' +
+        '<button type="button" data-v="0" class="' + (!view.vertical ? 'on' : '') + '">가로 · 유튜브 롱폼</button>' +
+        '<button type="button" data-v="1" class="' + (view.vertical ? 'on' : '') + '">세로 · 쇼츠·릴스</button></div>' +
+        '<details class="small" style="margin-top:12px"><summary>md 쓰는 법</summary><ul class="small">' +
+        '<li><code># 제목</code> → 첫 화면</li><li><code>## 소제목</code> → 소제목 화면, 아래 장면들의 이름</li>' +
+        '<li><code>&gt; 발췌 문장 (p.23)</code> → 발췌 장면 (쪽수는 화면에만, 읽을 글에서는 빠짐)</li>' +
+        '<li>빈 줄로 나뉜 문단, <code>- 목록</code> 한 줄 → 내 생각 장면 하나</li>' +
+        '<li><code>[인물: 위로]</code> → 그 장면에 나올 인물. 책 읽기·생각·위로·걷기·쉬기·기쁨·기록·희망·슬픔·없음 중에서. 안 적으면 글 속 낱말을 보고 골라요.</li></ul></details>' +
+        '</div>' +
+        '<div class="card"><h2>장면 ' + sc.length + '개' + (parsed.title ? ' · ' + esc(parsed.title) : '') + '</h2>' +
+        (sc.length ? sc.map((x, i) => '<div class="dub-row"><div class="dub-head"><span class="dub-no">' + (i + 1) + '</span><span class="small muted">' +
+          esc(KIND[x.kind] || '') + ' · ' + esc(x.part) + (x.pose ? ' · 인물: ' + esc(POSE_LABEL[x.pose] || x.pose) : '') + '</span></div>' +
+          '<div class="dub-say">' + esc(x.screen) + '</div>' + (x.say && x.say !== x.screen ? '<div class="small muted">읽을 글: ' + esc(x.say) + '</div>' : '') + '</div>').join('')
+          : '<p class="muted small">아직 장면이 없어요. md 파일을 고르거나 붙여넣어 주세요.</p>') + '</div>' +
+        '<div class="actions center"><button class="btn arrow" id="md-go" type="button"' + (sc.some(x => x.say) ? '' : ' disabled') + '>🎬 이대로 더빙 영상 만들기</button></div>' +
+        '<p class="small muted center">붙여넣은 글과 녹음은 이 기기에만 남아요. GitHub에는 올라가지 않아요.</p>';
+      document.getElementById('back').addEventListener('click', () => go(view.from || { name: 'list' }));
+      document.getElementById('md-file').addEventListener('change', async e => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        view.text = await f.text(); lsSet(MD_KEY, view.text); paint();
+      });
+      let timer = null;
+      document.getElementById('md-text').addEventListener('input', e => {
+        view.text = e.target.value; lsSet(MD_KEY, view.text);
+        clearTimeout(timer); timer = setTimeout(() => { const pos = e.target.selectionStart; paint(); const ta = document.getElementById('md-text'); ta.focus(); ta.setSelectionRange(pos, pos); }, 700);
+      });
+      document.querySelectorAll('#md-fmt button').forEach(b => b.addEventListener('click', () => { view.vertical = b.dataset.v === '1'; lsSet(MD_FMT, b.dataset.v); paint(); }));
+      document.getElementById('md-go').addEventListener('click', () => go({ name: 'video', kind: 'md', text: view.text, vertical: view.vertical, from: view }));
+    };
+    paint();
+  }
+
   var videoHandle = null;
   async function renderVideo() {
     const back = () => go(view.from || { name: 'list' });
@@ -1812,6 +1869,26 @@
     catch (e) { app.innerHTML = '<p class="notice">영상 기능을 불러오지 못했어요: ' + esc(e.message) + '</p>'; return; }
     const opts = { intro: state.intro, outro: state.outro };
     let items, title, vertical, scenes = [];
+    if (view.kind === 'md') {
+      let md;
+      try { md = await import('./mdscript.js?v=' + APP_VERSION); } catch (e) { back(); return; }
+      const parsed = md.parseMd(view.text || '');
+      if (!parsed.scenes.some(x => x.say)) { back(); return; }
+      title = parsed.title || '내 md 영상';
+      let motion = lsGet('rn.md.motion') || 'clay';
+      if (!mod.MOTIONS[motion]) motion = 'clay';
+      const withSec = parsed.scenes.map(x => Object.assign({}, x, { sec: x.say ? Math.max(2, Math.round(x.say.length / 5) + 2) : 2.5, bookId: 'md', motion, book: title }));
+      const safe = String(title).replace(/[\\/:*?"<>|·]+/g, ' ').trim().replace(/\s+/g, '-') || 'reading-notes';
+      if (videoHandle) videoHandle.stop();
+      videoHandle = await mod.mount(app, {
+        title, scenes: withSec, vertical: !!view.vertical, storeKey: 'md', keyByText: true,
+        motions: [{ bookId: 'md', title: '내 md 영상', motion }],
+        motionHint: '점토 스톱모션은 장면마다 글에 맞는 점토 인물이 나와요. 인물은 아래 장면마다 바꿀 수 있어요.', fileName: safe + (view.vertical ? '-shorts' : '-long'),
+        onMotion: (bid, m) => lsSet('rn.md.motion', m),
+        onBack: () => { videoHandle = null; back(); }
+      });
+      return;
+    }
     if (view.kind === 'day') {
       const date = view.date;
       items = Object.values(books).filter(b => !b.trashedAt).map(b => ({ book: b, entry: getEntry(b, date) }))
