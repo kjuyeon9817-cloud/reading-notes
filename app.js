@@ -6,7 +6,7 @@
   'use strict';
 
   // 새 버전을 올릴 때마다 바꾼다. 브라우저가 예전 파일을 쓰지 않게 하려고.
-  const APP_VERSION = '20261128a';
+  const APP_VERSION = '20261128b';
 
   const LS_STATE = 'rn.state.v2';
   const DATA_DIR = 'books';
@@ -583,7 +583,8 @@
       '<label class="inline-date">지난 날 추가 <input type="date" id="pick-date" value="' + esc(date) + '" aria-label="다른 날짜 기록 보기"></label></p>' +
       '<label for="pages">이 날 읽은 곳 (선택)</label><input id="pages" type="text" placeholder="예: 45~92쪽, 3장까지" value="' + esc(entry.pages) + '">' +
       '<div class="actions"><button class="btn small" id="to-export" type="button">' + sessionNo + '번째 날 기록으로 포스팅용 글 만들기</button>' +
-      '<button class="btn ghost small" id="to-md" type="button">📝 옵시디언으로 보내기</button></div>' +
+      '<button class="btn ghost small" id="to-md" type="button">📝 옵시디언으로 보내기</button>' +
+      '<button class="btn ghost small" id="dl-md" type="button">📥 2·3·4 md로 받기</button></div>' +
       '</div>' +
 
       '<div class="card"><h2><span class="section-num">2</span>발췌한 문장</h2>' +
@@ -604,6 +605,11 @@
 
     document.getElementById('back').addEventListener('click', () => go({ name: 'list' }));
     document.getElementById('to-export').addEventListener('click', () => go({ name: 'export', bookId: book.id, date: date, tab: 'blog' }));
+    document.getElementById('dl-md').addEventListener('click', () => {
+      const e = getEntry(book, date);
+      if (!e || entryIsEmpty(e)) { alert('이 날 적은 내용이 아직 없어요.'); return; }
+      downloadText(book.title + ' - ' + sessionNo + '번째 날.md', dayMarkdown(book, e, sessionNo));
+    });
     document.getElementById('to-md').addEventListener('click', () => {
       const e = getEntry(book, date);
       if (!e || !F.hasContent(e)) { alert('이 날 기록이 아직 없어요.'); return; }
@@ -1173,6 +1179,25 @@
       }
       L.push('');
     });
+    return L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  }
+  // 그날 기록의 2(발췌한 문장)·3(내용 정리)·4(현실 적용)를 md로. 글은 적은 그대로, '내 md로 영상'에 바로 넣을 수 있는 모양.
+  function dayMarkdown(book, entry, no) {
+    const tx = v => String(v || '').replace(/\r\n?/g, '\n').trim();
+    const L = ['# ' + tx(book.title) + ' · ' + no + '번째 날', '',
+      '<!-- ' + [tx(book.author), entry.date, tx(entry.pages)].filter(Boolean).join(' · ') + ' -->', ''];
+    const qs = (entry.quotes || []).filter(filledQuote);
+    if (qs.length) {
+      L.push('## 발췌한 문장', '');
+      qs.forEach(q => {
+        const page = tx(q.page), where = page ? (/^\d/.test(page) ? ' (p.' + page + ')' : ' (' + page + ')') : '';
+        if (tx(q.text)) { L.push(tx(q.text).split('\n').map((x, i, a) => '> ' + x + (i === a.length - 1 ? where : '')).join('\n'), ''); }
+        if (tx(q.reason)) L.push(tx(q.reason), '');
+      });
+    }
+    if (tx(entry.summary)) L.push('## 오늘 읽은 내용 정리', '', tx(entry.summary), '');
+    const as = (entry.applications || []).filter(a => tx(a.text));
+    if (as.length) { L.push('## 현실에 적용하기', ''); as.forEach(a => L.push('- ' + tx(a.text).replace(/\n/g, ' '))); L.push(''); }
     return L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
   }
   function downloadText(name, text) {

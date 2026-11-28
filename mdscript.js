@@ -76,6 +76,8 @@ export function parseMd(text) {
     const trimmed = line.trim();
     if (!trimmed) { flush(); continue; }
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) { flush(); continue; }
+    // 인물 표시가 아닌 주석 한 줄(<!-- 저자 · 날짜 -->)은 영상에 넣지 않는다
+    if (/^<!--[\s\S]*-->$/.test(trimmed) && !/(인물|캐릭터|character)\s*[:：]/i.test(trimmed)) continue;
     // 인물 표시만 있는 줄 → 다음 장면에
     const only = takePose(trimmed);
     if (only.pose && !only.s.trim()) { if (buf) { flush(); } pending = only.pose; continue; }
