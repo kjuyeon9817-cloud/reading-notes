@@ -442,3 +442,5 @@ p.over, .small.over { color: var(--warn); }
 .pair-close { margin-left: auto; }
 .pair-q.pair-tap { padding-right: 16px; }
 @media (max-width: 560px) { .pair.compact .qpage { display: none; } .pair.compact .pair-t { padding-left: 16px; } }
+.pose-pick { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; }
+.pose-pick select { flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); font: inherit; }

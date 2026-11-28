@@ -7,8 +7,22 @@ export const MOTIONS = {
   wave: { label: '잔잔한 물결', hint: '심리·에세이·마음' },
   growth: { label: '올라가는 선', hint: '경제·경영·자기계발' },
   orbit: { label: '궤도와 별', hint: '과학·철학·우주' },
-  bloom: { label: '피어나는 원', hint: '그 밖의 모든 책' }
+  bloom: { label: '피어나는 원', hint: '그 밖의 모든 책' },
+  clay: { label: '점토 스톱모션', hint: '점토 인물·지문 글씨·따뜻한 조명' }
 };
+
+// 점토 스톱모션은 clay.js에서 그린다 (같은 ?v= 로 불러 캐시가 섞이지 않게)
+let Clay = null;
+export async function loadClay() {
+  if (!Clay) Clay = await import('./clay.js' + new URL(import.meta.url).search);
+  return Clay;
+}
+const POSE_KEY = 'rn.pose|';
+function savedPose(k) { try { return localStorage.getItem(POSE_KEY + k) || ''; } catch (e) { return ''; } }
+// 점토 스타일에서 화면에 글을 띄울지 (기본: 안 띄움, 목소리와 인물만)
+function clayText() { try { return localStorage.getItem('rn.clay.text') === '1'; } catch (e) { return false; } }
+function setClayText(v) { try { localStorage.setItem('rn.clay.text', v ? '1' : '0'); } catch (e) { /* 화면에서는 바뀜 */ } }
+function savePose(k, v) { try { if (v) localStorage.setItem(POSE_KEY + k, v); else localStorage.removeItem(POSE_KEY + k); } catch (e) { /* 이 기기에 못 남겨도 화면에서는 바뀜 */ } }
 
 const KEYWORDS = [
   ['wave', ['심리', '에세이', '마음', '감정', '상담', '치유', '관계', '명상', '육아']],
@@ -196,6 +210,7 @@ function drawMotion(ctx, W, H, motion, t, seed) {
 
 // 장면 하나를 그린다. t = 장면 시작부터 흐른 초, dur = 장면 길이
 function drawScene(ctx, W, H, scene, t, dur, info) {
+  if (scene.motion === 'clay' && Clay) { Clay.draw(ctx, W, H, scene, t, dur, info, { chunks, wrap, pickChunk, chunkStart, FONT }); return; }
   const vertical = H > W, S = Math.min(W, H), pad = S * 0.08;
   ctx.globalAlpha = 1;
   const g = ctx.createLinearGradient(0, 0, W, H);
@@ -310,8 +325,17 @@ function pickRecorderType(kind) {
 export async function mount(root, opts) {
   // opts: { title, scenes:[{part,screen,say,same,sec,motion,book}], vertical, storeKey, motions:[{bookId,title,motion}], onMotion(bookId,m), onBack }
   const W = opts.vertical ? 1080 : 1920, H = opts.vertical ? 1920 : 1080;
-  const scenes = opts.scenes.map((s, i) => Object.assign({}, s, { seed: i * 1.7, highlight: i === 0 }));
-  const keyOf = (s, i) => opts.storeKey + '|' + i + '|' + hash(s.say);
+  const scenes = opts.scenes.map((s, i) => Object.assign({}, s, { seed: i * 1.7, highlight: i === 0, _id: opts.storeKey + '|' + i }));
+  // keyByText: 장면 순서가 바뀌어도(md를 고쳐도) 같은 글의 녹음을 그대로 쓴다
+  const keyOf = (s, i) => opts.keyByText
+    ? opts.storeKey + '|t|' + hash(s.say) + '|' + scenes.slice(0, i).filter(x => x.say === s.say).length
+    : opts.storeKey + '|' + i + '|' + hash(s.say);
+  const poseKey = (s, i) => keyOf(s, i) + '|' + hash(s.screen || '');
+  // 고른 인물: 이 기기에서 바꾼 것 > md에 적은 [인물: …] > 자동 ('auto' = 일부러 자동으로 둠)
+  let showText = clayText();
+  scenes.forEach(s => { s.hideText = !showText; });
+  scenes.forEach((s, i) => { const v = savedPose(poseKey(s, i)); s.pose = v === 'auto' ? '' : (v || s.pose || ''); });
+  try { await loadClay(); } catch (e) { /* 점토 스타일 없이 다른 모션은 쓸 수 있음 */ }
   const clips = await Promise.all(scenes.map((s, i) => s.say ? clipGet(keyOf(s, i)) : null));
   let actx = null;
   const audioCtx = () => (actx = actx || new (window.AudioContext || window.webkitAudioContext)());
@@ -320,7 +344,7 @@ export async function mount(root, opts) {
   const recorded = () => scenes.filter((s, i) => !s.say || clips[i]).length;
   let stopFn = null, recState = null;
 
-  try { await document.fonts.load('800 60px "Noto Sans KR"'); await document.fonts.load('600 40px "Noto Sans KR"'); } catch (e) { /* 글꼴 없이도 그린다 */ }
+  try { await document.fonts.load('800 60px "Noto Sans KR"'); await document.fonts.load('600 40px "Noto Sans KR"'); if (Clay) await Clay.prepare(scenes.map(s => (s.screen || '') + (s.say || '') + (s.part || '') + (s.book || ''))); } catch (e) { /* 글꼴 없이도 그린다 */ }
 
   function fmt(sec) { sec = Math.round(sec); return (sec >= 60 ? Math.floor(sec / 60) + '분 ' : '') + (sec % 60) + '초'; }
 
@@ -336,11 +360,16 @@ export async function mount(root, opts) {
       '<div class="card"><h2>모션 스타일</h2>' +
       opts.motions.map(m => '<label class="small">' + esc(m.title) + '</label><div class="date-chips">' +
         Object.keys(MOTIONS).map(k => '<button type="button" class="chip' + (k === m.motion ? ' on' : '') + '" data-motion="' + k + '" data-mbook="' + esc(m.bookId) + '" title="' + esc(MOTIONS[k].hint) + '">' + esc(MOTIONS[k].label) + '</button>').join('') + '</div>').join('') +
-      '<p class="small muted">책의 주제를 보고 자동으로 골랐어요. 눌러서 바꿀 수 있어요.</p></div>' +
+      (scenes.some(s => s.motion === 'clay') ? '<label class="small" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="v-text"' + (showText ? ' checked' : '') + '> 점토 스톱모션 화면에 글 띄우기 (끄면 목소리와 인물만, 제목·소제목은 그대로)</label>' : '') +
+      '<p class="small muted">' + esc(opts.motionHint || '책의 주제를 보고 자동으로 골랐어요. 눌러서 바꿀 수 있어요.') + '</p></div>' +
       '<div class="card"><h2>장면별 녹음</h2><p class="small muted">장면을 누르면 위 화면에서 움직임을 볼 수 있어요. 🎙를 누르고 아래 글을 읽은 뒤 ■로 멈춰요. 틀린 장면만 다시 녹음하면 돼요.</p>' +
       scenes.map((s, i) => '<div class="dub-row' + (clips[i] ? ' done' : '') + '" data-scene="' + i + '">' +
         '<div class="dub-head"><span class="dub-no">' + (i + 1) + '</span><span class="small muted">' + esc(s.part) + ' · ' +
         (s.say ? (clips[i] ? '녹음 ' + clips[i].dur.toFixed(1) + '초' : '녹음 전') : '읽을 글 없음 · 2.5초') + '</span></div>' +
+        (s.motion === 'clay' && Clay ? '<label class="small pose-pick">나오는 인물 <select data-pose="' + i + '">' +
+          '<option value="">자동 · ' + esc(Clay.POSES[Clay.autoPose(Object.assign({}, s, { pose: '' }))].label) + '</option>' +
+          Object.keys(Clay.POSES).map(k => '<option value="' + k + '"' + (s.pose === k ? ' selected' : '') + '>' + esc(Clay.POSES[k].label) + ' (' + esc(Clay.POSES[k].hint) + ')</option>').join('') +
+          '</select></label>' : '') +
         (s.say ? '<div class="dub-say">' + esc(s.say) + '</div><div class="actions">' +
           '<button class="btn small-btn" type="button" data-rec="' + i + '">' + (recState && recState.i === i ? '■ 멈추기' : '🎙 ' + (clips[i] ? '다시 녹음' : '녹음')) + '</button>' +
           (clips[i] ? '<button class="btn ghost small-btn" type="button" data-listen="' + i + '">▶ 듣기</button><button class="btn danger small-btn" type="button" data-del="' + i + '">지우기</button>' : '') +
@@ -475,8 +504,15 @@ export async function mount(root, opts) {
       opts.onMotion(bid, m);
       paint();
     }));
+    const vt = root.querySelector('#v-text');
+    if (vt) vt.addEventListener('change', () => { showText = vt.checked; setClayText(showText); scenes.forEach(s => { s.hideText = !showText; }); draw(0, 1.5); });
+    root.querySelectorAll('[data-pose]').forEach(el => el.addEventListener('change', () => {
+      const i = Number(el.dataset.pose), s = scenes[i];
+      s.pose = el.value; savePose(poseKey(s, i), el.value || 'auto');
+      loopScene(i);
+    }));
     root.querySelectorAll('[data-scene]').forEach(el => el.addEventListener('click', e => {
-      if (e.target.closest('button')) return;
+      if (e.target.closest('button, select, label')) return;
       loopScene(Number(el.dataset.scene));
     }));
     root.querySelectorAll('[data-rec]').forEach(el => el.addEventListener('click', () => {
@@ -500,6 +536,7 @@ export async function mount(root, opts) {
 }
 
 // 테스트용: 장면 하나를 그려 본다
-export function preview(canvas, scene, t, dur) {
+export async function preview(canvas, scene, t, dur) {
+  if (scene.motion === 'clay') { await loadClay(); await Clay.prepare([(scene.screen || '') + (scene.part || '') + (scene.book || '')]); }
   drawScene(canvas.getContext('2d'), canvas.width, canvas.height, Object.assign({ seed: 0 }, scene), t, dur || 5, { progress: 0.4 });
 }
